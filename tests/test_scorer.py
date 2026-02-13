@@ -1,0 +1,165 @@
+"""Tests for the scoring engine, including canonical test cases from README Section 12."""
+
+
+def test_empty_string(scorer):
+    """Empty input should return zero-confidence result."""
+    result = scorer.score("")
+    assert result.confidence == 0.0
+    assert result.matched_words == 0
+    assert result.top_reefs == []
+
+
+def test_all_unknown_words(scorer):
+    """All-unknown input should return zero-confidence result."""
+    result = scorer.score("xyzzy plugh qwerty asdfgh")
+    assert result.confidence == 0.0
+    assert result.matched_words == 0
+    assert len(result.unknown_words) == 4
+    assert result.coverage == 0.0
+
+
+def test_single_word(scorer):
+    """A single known word should produce a result with matched_words=1."""
+    result = scorer.score("cortex")
+    assert result.matched_words == 1
+    assert result.coverage == 1.0
+    assert len(result.top_reefs) > 0
+
+
+def test_result_structure(scorer):
+    """TopicResult should have correct structure."""
+    result = scorer.score("neuron cortex brain")
+    assert len(result.arch_scores) == 4
+    assert isinstance(result.confidence, float)
+    assert isinstance(result.coverage, float)
+    assert isinstance(result.matched_words, int)
+    assert isinstance(result.unknown_words, list)
+    for reef in result.top_reefs:
+        assert hasattr(reef, "reef_id")
+        assert hasattr(reef, "z_score")
+        assert hasattr(reef, "raw_bm25")
+        assert hasattr(reef, "n_contributing_words")
+        assert hasattr(reef, "name")
+        assert isinstance(reef.name, str)
+    for island in result.top_islands:
+        assert hasattr(island, "island_id")
+        assert hasattr(island, "aggregate_z")
+        assert hasattr(island, "n_contributing_reefs")
+        assert hasattr(island, "name")
+
+
+def test_score_batch(scorer):
+    """score_batch should return one result per input."""
+    texts = ["neuron cortex", "ocean waves", "market stock"]
+    results = scorer.score_batch(texts)
+    assert len(results) == 3
+    for r in results:
+        assert hasattr(r, "top_reefs")
+
+
+def test_top_k(scorer):
+    """top_k parameter should limit number of returned reefs."""
+    result = scorer.score("neuron synapse axon dendrite cortex brain", top_k=5)
+    assert len(result.top_reefs) == 5
+
+
+# --- Canonical test cases (README Section 12) ---
+
+def test_canonical_generic_text(scorer):
+    """Test 1: Generic text should produce low confidence."""
+    result = scorer.score(
+        "now is the time for all good men to come to the aid of the country"
+    )
+    assert result.confidence < 1.5
+
+
+def test_canonical_huck_finn(scorer):
+    """Test 2: Huck Finn passage - 'archaic literary terms' in top results."""
+    huck = (
+        'It was after sun-up now, but we went right on and didn\'t tie up. '
+        'The king and the duke turned out by-and-by looking pretty rusty; '
+        "but after they'd jumped overboard and took a swim it chippered them "
+        'up a good deal. After breakfast the king he took a seat on the corner '
+        'of the raft, and pulled off his boots and rolled up his britches, and '
+        'let his legs dangle in the water, so as to be comfortable, and lit '
+        'his pipe, and went to getting his Romeo and Juliet by heart. When he '
+        'had got it pretty good him and the duke begun to practice it together. '
+        'The duke had to learn him over and over again how to say every speech; '
+        'and he made him sigh, and put his hand on his heart, and after a while '
+        'he said he done it pretty well; "only," he says, "you mustn\'t bellow '
+        'out Romeo! that way, like a bull -- you must say it soft and sick and '
+        'languishy, so -- R-o-o-meo! that is the idea; for Juliet\'s a dear '
+        'sweet mere child of a girl, you know, and she doesn\'t bray like a '
+        'jackass."'
+    )
+    result = scorer.score(huck)
+    reef_names = [r.name for r in result.top_reefs]
+    # archaic literary terms should be in top 10
+    assert "archaic literary terms" in reef_names
+    # All z-scores should be positive and high for this rich passage
+    assert result.top_reefs[0].z_score > 10.0
+
+
+def test_canonical_neuroscience(scorer):
+    """Test 4: Neuroscience words - raw BM25 for 'neural and structural' ~7.45."""
+    result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
+    # All words should match (100% coverage)
+    assert result.coverage == 1.0
+    assert result.matched_words == 8
+    # Find neural and structural in results
+    neural = next(
+        (r for r in result.top_reefs if r.name == "neural and structural"), None
+    )
+    assert neural is not None
+    # Raw BM25 should be approximately 7.45
+    assert abs(neural.raw_bm25 - 7.45) < 0.1
+
+
+def test_canonical_topic_shift(scorer):
+    """Test 5: Two halves of Huck Finn should produce divergent z-score distributions."""
+    huck = (
+        'It was after sun-up now, but we went right on and didn\'t tie up. '
+        'The king and the duke turned out by-and-by looking pretty rusty; '
+        "but after they'd jumped overboard and took a swim it chippered them "
+        'up a good deal. After breakfast the king he took a seat on the corner '
+        'of the raft, and pulled off his boots and rolled up his britches, and '
+        'let his legs dangle in the water, so as to be comfortable, and lit '
+        'his pipe, and went to getting his Romeo and Juliet by heart. When he '
+        'had got it pretty good him and the duke begun to practice it together. '
+        'The duke had to learn him over and over again how to say every speech; '
+        'and he made him sigh, and put his hand on his heart, and after a while '
+        'he said he done it pretty well; "only," he says, "you mustn\'t bellow '
+        'out Romeo! that way, like a bull -- you must say it soft and sick and '
+        'languishy, so -- R-o-o-meo! that is the idea; for Juliet\'s a dear '
+        'sweet mere child of a girl, you know, and she doesn\'t bray like a '
+        'jackass."'
+    )
+    words = huck.split()
+    mid = len(words) // 2
+    first_half = " ".join(words[:mid])
+    second_half = " ".join(words[mid:])
+
+    r1 = scorer.score(first_half)
+    r2 = scorer.score(second_half)
+
+    # The two halves should have different top reefs
+    top1 = r1.top_reefs[0].reef_id
+    top2 = r2.top_reefs[0].reef_id
+    assert top1 != top2, "Two halves should have different top reefs"
+
+
+def test_background_subtraction_effect(scorer):
+    """Background subtraction should change rankings vs raw BM25."""
+    result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
+    # Get raw and z-score rankings
+    raw_ranking = sorted(result.top_reefs, key=lambda r: r.raw_bm25, reverse=True)
+    z_ranking = result.top_reefs  # already sorted by z-score
+
+    # Rankings should differ (background subtraction reorders)
+    raw_top = raw_ranking[0].reef_id
+    z_top = z_ranking[0].reef_id
+    # At minimum, the raw top should differ from z-score top
+    # (demonstrating background subtraction has an effect)
+    raw_order = [r.reef_id for r in raw_ranking]
+    z_order = [r.reef_id for r in z_ranking]
+    assert raw_order != z_order

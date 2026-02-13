@@ -1,0 +1,23 @@
+{
+  "version": "1.0",
+  "format": "msgpack",
+  "build_timestamp": "2026-02-13T06:09:55Z",
+  "files": {
+    "word_lookup.bin": "697bdd018bd217071fc3bae9c3801be6f7728e789a62d0867cd3e67aa6429bc8",
+    "word_reefs.bin": "dcf6b07eaed813e614a8a2cff60a1779beffffd318776b5647dafd6a2bf0bb90",
+    "reef_meta.bin": "ba2a1037fae30920871f67b42c0c9491d38223bee4f1f635d7cfeec6c4bb080d",
+    "island_meta.bin": "f8c2ac4e7592f94df78951da96c7e7946618a3d4f9c9cc8e5dec0ed2899cf9df",
+    "background.bin": "bf7326be08cea90c774c2ee4d111dbd55f1692a258aa351ff96edfe22916e8d0",
+    "compounds.bin": "af823a106bfa6911f0547c83c4664b581ce6381ee104745293f82ef927842fdc",
+    "constants.bin": "f99649fe65bd892198bfbed978a5b90fb8337cd764ab05ad0da679b638fa4a05"
+  },
+  "stats": {
+    "n_reefs": 207,
+    "n_islands": 52,
+    "n_archs": 4,
+    "n_words": 146698,
+    "n_lookup_entries": 173286,
+    "n_words_with_reefs": 146695,
+    "n_compounds": 63912
+  }
+}
