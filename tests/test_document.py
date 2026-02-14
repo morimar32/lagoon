@@ -17,6 +17,8 @@ def test_single_sentence(scorer):
     assert result.n_segments == 1
     assert len(result.segments) == 1
     assert result.boundaries == []
+    # Per-sentence results should have exactly 1 entry
+    assert len(result.segments[0].sentence_results) == 1
 
 
 def test_pre_segmented_input(scorer):
@@ -24,7 +26,7 @@ def test_pre_segmented_input(scorer):
         "The brain processes information.",
         "Neural pathways transmit signals.",
     ]
-    result = scorer.analyze(sentences)
+    result = scorer.analyze(sentences, min_chunk_sentences=1)
     assert result.n_sentences == 2
     assert isinstance(result.segments[0], TopicSegment)
 
@@ -33,12 +35,13 @@ def test_segment_structure(scorer):
     result = scorer.analyze([
         "Neurons fire electrical signals.",
         "The stock market crashed today.",
-    ])
+    ], min_chunk_sentences=1)
     for seg in result.segments:
         assert hasattr(seg, "sentences")
         assert hasattr(seg, "start_idx")
         assert hasattr(seg, "end_idx")
         assert hasattr(seg, "topic")
+        assert hasattr(seg, "sentence_results")
         assert seg.start_idx <= seg.end_idx
 
 
@@ -59,6 +62,7 @@ def test_multi_topic_detection(scorer):
     for seg in result.segments:
         assert seg.topic is not None
         assert len(seg.sentences) > 0
+        assert len(seg.sentence_results) == len(seg.sentences)
 
 
 def test_sensitivity_parameter(scorer):
@@ -70,17 +74,78 @@ def test_sensitivity_parameter(scorer):
         "Investors are buying bonds.",
     ]
     # Very low sensitivity -> more segments
-    low = scorer.analyze(sentences, sensitivity=0.0)
+    low = scorer.analyze(sentences, sensitivity=0.0, min_chunk_sentences=1)
     # Very high sensitivity -> fewer segments
-    high = scorer.analyze(sentences, sensitivity=3.0)
+    high = scorer.analyze(sentences, sensitivity=3.0, min_chunk_sentences=1)
     assert high.n_segments <= low.n_segments
 
 
 def test_analyze_returns_all_sentences(scorer):
     """All input sentences should appear in output segments."""
-    sentences = ["One.", "Two.", "Three."]
-    result = scorer.analyze(sentences)
+    sentences = ["One fish.", "Two fish.", "Three fish."]
+    result = scorer.analyze(sentences, min_chunk_sentences=1)
     all_output = []
     for seg in result.segments:
         all_output.extend(seg.sentences)
     assert all_output == sentences
+
+
+def test_sentence_results_populated(scorer):
+    """Each segment should have per-sentence TopicResults."""
+    sentences = [
+        "The neuron transmits electrical signals through the axon.",
+        "Dendrites receive signals from neighboring neurons.",
+        "The hippocampus plays a role in memory formation.",
+    ]
+    result = scorer.analyze(sentences, min_chunk_sentences=1)
+    for seg in result.segments:
+        assert len(seg.sentence_results) == len(seg.sentences)
+        for sr in seg.sentence_results:
+            assert hasattr(sr, "top_reefs")
+            assert hasattr(sr, "matched_word_ids")
+            assert hasattr(sr, "unknown_words")
+
+
+def test_sentence_results_have_matched_word_ids(scorer):
+    """Per-sentence TopicResults should include matched_word_ids."""
+    result = scorer.analyze(
+        ["Neuron synapse cortex brain hippocampus."],
+        min_chunk_sentences=1,
+    )
+    sr = result.segments[0].sentence_results[0]
+    assert isinstance(sr.matched_word_ids, frozenset)
+    assert len(sr.matched_word_ids) > 0
+
+
+def test_min_chunk_sentences(scorer):
+    """Segments smaller than min_chunk_sentences should be merged."""
+    sentences = [
+        "The brain processes information.",
+        "Neural pathways transmit signals.",
+        "Stock prices surged on Wall Street.",
+        "Bond yields fell sharply.",
+    ]
+    # With min=3, we should get at most 1 segment (can't split 4 into 2 chunks of 3+)
+    result = scorer.analyze(sentences, min_chunk_sentences=3)
+    for seg in result.segments:
+        assert len(seg.sentences) >= 2  # at least min_chunk_sentences or all merged
+
+
+def test_max_chunk_sentences(scorer):
+    """Segments larger than max_chunk_sentences should be split."""
+    # Generate enough sentences to exceed max
+    sentences = [f"Sentence number {i} about various topics." for i in range(10)]
+    result = scorer.analyze(sentences, max_chunk_sentences=4, min_chunk_sentences=1)
+    for seg in result.segments:
+        assert len(seg.sentences) <= 4
+
+
+def test_max_chunk_sentences_disabled(scorer):
+    """max_chunk_sentences=0 should disable max size enforcement."""
+    sentences = [f"Sentence number {i} about various topics." for i in range(50)]
+    result = scorer.analyze(
+        sentences, max_chunk_sentences=0, min_chunk_sentences=1,
+    )
+    # With no max and high sensitivity (few boundaries), could be one big segment
+    total = sum(len(seg.sentences) for seg in result.segments)
+    assert total == 50

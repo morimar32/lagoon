@@ -8,7 +8,7 @@ Lagoon is meant to be the "glue" that supports a number of downstream projects m
 
 ## 1. What is Lagoon
 
-Lagoon is a standalone text-scoring library that maps arbitrary input text to a hierarchy of 207 semantic reefs. It loads a set of pre-built binary data files at startup (~16 MB on disk) and scores text in ~10-15 microseconds per sentence using depth-weighted BM25 with background subtraction.
+Lagoon is a standalone text-scoring library that maps arbitrary input text to a hierarchy of 207 semantic reefs. It loads a set of pre-built binary data files at startup (~16 MB on disk) and scores text in ~100 microseconds per sentence (pure Python) using depth-weighted BM25 with background subtraction.
 
 **What lagoon does:**
 - Loads binary data files produced by the export tool from [Windowsill](https://github.com/morimar32/windowsill)
@@ -359,7 +359,8 @@ class TopicResult:
     confidence: float                      # z-score gap: #1 - #2 reef
     coverage: float                        # matched_words / total_input_words
     matched_words: int                     # words that hit the dictionary
-    unknown_words: list[str]              # words that failed lookup + stem
+    unknown_words: list[str]              # words that failed lookup + stem (stop words excluded)
+    matched_word_ids: frozenset[int]      # set of word_ids that matched (for cross-referencing)
 
 @dataclass
 class ScoredReef:
@@ -375,7 +376,32 @@ class ScoredIsland:
     n_contributing_reefs: int             # u16
 ```
 
-**Rust:** `unknown_words` becomes `Vec<String>`. The rest are flat numeric types. `top_reefs` and `top_islands` are small `Vec`s (typically K=10), allocated per call.
+**Rust:** `unknown_words` becomes `Vec<String>`, `matched_word_ids` becomes `HashSet<u32>`. The rest are flat numeric types. `top_reefs` and `top_islands` are small `Vec`s (typically K=10), allocated per call.
+
+### TopicSegment (analysis output)
+
+```python
+@dataclass
+class TopicSegment:
+    sentences: list[str]                  # sentences in this segment
+    start_idx: int                        # first sentence index (0-based)
+    end_idx: int                          # last sentence index (inclusive)
+    topic: TopicResult                    # segment-level scoring
+    sentence_results: list[TopicResult]   # per-sentence scoring data
+```
+
+Each segment from `analyze()` includes `sentence_results` — one `TopicResult` per sentence. These provide per-sentence `matched_word_ids`, `unknown_words`, `top_reefs`, and `coverage` without requiring additional scoring calls.
+
+### DocumentAnalysis (analysis output)
+
+```python
+@dataclass
+class DocumentAnalysis:
+    segments: list[TopicSegment]          # topic-coherent segments
+    n_sentences: int                      # total sentences
+    n_segments: int                       # total segments
+    boundaries: list[int]                 # sentence indices where topic shifts occur
+```
 
 ---
 
@@ -428,7 +454,7 @@ def scan_compounds(self, text_lower):
     return matched_word_ids, consumed
 ```
 
-**Performance:** O(n) where n = text length. Typically ~100-500ns for a sentence.
+**Performance:** O(n) where n = text length. Typically ~1-3μs for a sentence, ~17μs for a 200-word paragraph (pure Python; Rust target: ~100-500ns).
 
 ### 5.3 Phase 2: Tokenize + Normalize
 
@@ -467,9 +493,10 @@ def tokenize(self, text, consumed_spans):
     return matched, unknown
 ```
 
-**Performance per word:**
+**Performance per word (pure Python):**
 - HashMap lookup: ~50ns
-- Snowball stemmer fallback: ~200ns (fires ~30% of the time)
+- Snowball stemmer fallback: ~120ns (fires ~30% of the time)
+- Total per-word overhead including Python iteration: ~1μs/word
 
 ### 5.4 Phase 3: BM25 Accumulation
 
@@ -488,7 +515,7 @@ def accumulate_bm25(self, word_ids):
 
 BM25 term scores are fully precomputed. At runtime, this is pure accumulation — no IDF lookup, no tf computation, no length normalization. One multiply-add per reef entry.
 
-**Performance per word:** ~80ns (iterate ~13 reef entries, one multiply-add each).
+**Performance per word (pure Python):** ~650ns (iterate ~13 reef entries, one multiply-add each). Rust target: ~80ns/word.
 
 ### 5.5 Phase 4: Background Subtraction
 
@@ -504,7 +531,7 @@ def subtract_background(self, scores):
 
 Guard: if `bg_std[reef]` is zero (should not happen — epsilon floor applied at export), set z to 0.0.
 
-**Performance:** ~200ns total (two float ops per reef x 207).
+**Performance (pure Python):** ~9μs total (two float ops per reef x 207, dominated by Python loop overhead). Rust target: ~200ns.
 
 ### 5.6 Phase 5: Result Extraction
 
@@ -525,6 +552,9 @@ def extract_results(self, z_scores, raw_scores, word_counts, matched, unknown):
     # Coverage
     total_words = len(matched) + len(unknown)
     coverage = len(matched) / total_words if total_words > 0 else 0.0
+
+    # Filter stop words from unknown list
+    filtered_unknown = [w for w in unknown if w not in STOP_WORDS]
 
     # Island rollup
     island_z = defaultdict(lambda: [0.0, 0])
@@ -547,11 +577,12 @@ def extract_results(self, z_scores, raw_scores, word_counts, matched, unknown):
         top_reefs=top_reefs, top_islands=top_islands,
         arch_scores=arch_scores, confidence=confidence,
         coverage=coverage, matched_words=len(matched),
-        unknown_words=unknown,
+        unknown_words=filtered_unknown,
+        matched_word_ids=frozenset(matched),
     )
 ```
 
-**Performance:** ~500ns for partial sort + rollup.
+**Performance (pure Python):** ~25μs for partial sort + rollup (dominated by dataclass construction and Python sort). Rust target: ~500ns.
 
 ### 5.7 Unknown Words
 
@@ -561,7 +592,9 @@ Words that fail both the HashMap lookup and the Snowball stem fallback are colle
 - Domain-specific jargon (e.g., "Kubernetes", "GraphQL")
 - Typos
 
-The unknown words list is a first-class output signal. Downstream consumers can use it to detect vocabulary gaps, trigger fallback strategies, or build corpus-specific extensions.
+**Stop word filtering:** Before inclusion in `unknown_words`, tokens are checked against a built-in set of ~130 English stop words (`STOP_WORDS`). Common function words like "the", "and", "is", etc. are excluded even when they aren't in the dictionary — they carry no topical signal and would create noise for downstream vocabulary extension workflows. Stop words do NOT affect coverage calculation — coverage uses the raw count of matched + unmatched tokens.
+
+The unknown words list is a first-class output signal. Downstream consumers can use it to detect vocabulary gaps, trigger fallback strategies, or build corpus-specific extensions (see the vocabulary extension API in [Section 7](#7-api-surface)).
 
 ---
 
@@ -668,11 +701,90 @@ Score a single text string. Runs the full 5-phase pipeline. Returns a TopicResul
 
 Score multiple texts. Semantically equivalent to `[score(t) for t in texts]` but may optimize memory allocation (reuse the `[f32; 207]` scratch array across calls).
 
+### analyze(text, *, sensitivity=1.0, smooth_window=2, min_chunk_sentences=2, max_chunk_sentences=30) -> DocumentAnalysis
+
+Segment a document by topic shifts. Accepts raw text (string) or a pre-split list of sentences.
+
+Internally: scores each sentence to get z-score vectors and per-sentence `TopicResult` objects in a single pass, smooths vectors, computes cosine similarity between adjacent sentences, detects boundaries at similarity valleys, and enforces chunk size constraints.
+
+**Parameters:**
+- `text`: Raw text string or `list[str]` of pre-split sentences
+- `sensitivity`: Boundary detection threshold (default 1.0). Lower = more boundaries.
+- `smooth_window`: Sliding window size for z-score vector smoothing (default 2)
+- `min_chunk_sentences`: Minimum sentences per segment (default 2). Undersized segments are merged with predecessors.
+- `max_chunk_sentences`: Maximum sentences per segment (default 30). Oversized segments are split at weakest internal similarity boundaries. Set to 0 to disable.
+
+Returns a `DocumentAnalysis` with `segments` (list of `TopicSegment`), `boundaries`, `n_sentences`, and `n_segments`. Each `TopicSegment` includes `sentence_results` — per-sentence `TopicResult` objects with `matched_word_ids`, `unknown_words`, `top_reefs`, and `coverage`.
+
 ### lookup_word(word) -> Optional[WordInfo]
 
 Look up a single word in the dictionary. Applies the same normalization as Phase 2 (lowercase, then HashMap lookup, then Snowball stem fallback). Returns WordInfo if found, None if unknown.
 
 Useful for debugging and for downstream consumers that want to inspect individual word properties (specificity, IDF) before scoring.
+
+### filter_unknown(words) -> list[str]
+
+Batch-filter a list of words, returning only those unknown to the dictionary. Applies the same lookup pipeline as scoring (HashMap + Snowball stemmer fallback). Stop words are excluded from the result — common function words are not considered "unknown" even if absent from the dictionary.
+
+Useful for efficiently identifying vocabulary gaps across a document without full scoring.
+
+### Vocabulary Extension API
+
+These methods support extending the scorer's vocabulary at runtime with custom words learned from document context.
+
+#### next_word_id (property) -> int
+
+Returns the next available word_id (current length of the internal word_reefs list). Custom words are assigned sequential IDs starting from this value.
+
+#### compute_custom_word_scores(n_associated_reefs, associations) -> tuple[int, list[tuple[int, int]]]
+
+Compute quantized IDF and BM25 scores for a custom word, given its reef associations.
+
+**Parameters:**
+- `n_associated_reefs`: Total number of reefs associated with this word (used for IDF computation)
+- `associations`: List of `(reef_id, strength)` tuples where strength is 0.0-1.0
+
+**Returns:** `(idf_q, [(reef_id, bm25_q), ...])` — quantized IDF (u8, scale 51) and per-reef BM25 scores (u16, scale 8192).
+
+**Validation:** Raises `ValueError` for invalid reef_ids (>= 207), out-of-range strengths, or n_associated_reefs < 1.
+
+#### add_custom_word(word, reef_associations, *, specificity=2) -> WordInfo
+
+Full injection pipeline for a custom word:
+1. Normalize to lowercase
+2. Compute FNV-1a hash
+3. Validate: word not empty, not a duplicate, valid specificity (-2 to +2), non-empty associations, valid reef_ids and strengths
+4. Compute BM25 scores via `compute_custom_word_scores()`
+5. Allocate next word_id
+6. Inject into scorer's lookup structures
+
+**Parameters:**
+- `word`: The word string (will be lowercased)
+- `reef_associations`: List of `(reef_id, strength)` tuples where strength is 0.0-1.0
+- `specificity`: Sigma band (-2 to +2), default 2 (highly specific)
+
+**Returns:** `WordInfo` with the assigned word_hash, word_id, specificity, and idf_q.
+
+**Errors:** Raises `ValueError` for empty word, duplicate word, invalid specificity, empty associations, invalid reef_id, or invalid strength.
+
+#### rebuild_compounds(additional_compounds)
+
+Additively merge custom compound words into the Aho-Corasick automaton alongside the base ~64K compounds.
+
+**Parameters:**
+- `additional_compounds`: List of `(compound_string, word_id)` tuples
+
+After calling this method, `score()` and `analyze()` will match the new compounds during Phase 1 (Aho-Corasick scan).
+
+### STOP_WORDS
+
+`lagoon.STOP_WORDS` — a `frozenset[str]` of ~130 minimal English stop words. Includes single letters, determiners, conjunctions, prepositions, pronouns, common verb forms, modals, and contraction fragments.
+
+Used internally by `score()` and `filter_unknown()` to exclude noise from `unknown_words` lists. Also available for direct use by downstream consumers.
+
+### split_sentences(text) -> list[str]
+
+Split raw text into sentences using a regex-based sentence boundary detector. Used internally by `analyze()` when given a raw string.
 
 ---
 
@@ -688,7 +800,8 @@ Useful for debugging and for downstream consumers that want to inspect individua
 | confidence | f32 | z-score gap between #1 and #2 reef |
 | coverage | f32 | Fraction of input words that matched the dictionary |
 | matched_words | int | Count of matched words |
-| unknown_words | list[str] | Words that failed lookup + stem |
+| unknown_words | list[str] | Words that failed lookup + stem (stop words excluded) |
+| matched_word_ids | frozenset[int] | Set of word_ids that matched (for cross-referencing with custom vocabulary) |
 
 ### ScoredReef
 
@@ -731,28 +844,35 @@ Useful for debugging and for downstream consumers that want to inspect individua
 | compound automaton | ~1.3 MB | Aho-Corasick over ~64K strings |
 | **Total on disk** | **~16 MB** | |
 
-### Latency
+### Latency (Pure Python, Measured)
 
-| Input size | Target | Breakdown |
-|------------|--------|-----------|
-| 30-word sentence | ~10-15 us | ~500ns compounds + 30 x ~310ns/word + ~200ns bg-sub + ~500ns extract |
-| 200-word paragraph | ~100 us | Dominated by HashMap lookups |
-| 1000+ words | < 1 ms | Linear scaling, hash lookups dominant |
+All timings measured with `pytest-benchmark` on CPython 3.11. A Rust port is expected to be significantly faster — Rust targets are noted in Section 5 per-phase breakdowns.
+
+| Input size | Measured | Breakdown |
+|------------|----------|-----------|
+| 8-word phrase | ~56 μs | ~1μs compounds + ~7μs tokenize + ~5μs BM25 + ~9μs bg-sub + ~25μs extract |
+| 30-word sentence | ~96 μs | ~3μs compounds + ~31μs tokenize + ~20μs BM25 + ~9μs bg-sub + ~25μs extract |
+| 140-word passage | ~207 μs | Dominated by tokenization and BM25 accumulation |
+| 200-word paragraph | ~337 μs | Linear scaling, tokenization dominant |
+| 1000+ words | ~2.2 ms | Linear scaling |
 
 ### Startup
 
-< 100 ms — deserialize binary files + build Aho-Corasick automaton.
+~1.5s — deserialize binary files + build Aho-Corasick automaton (pure Python MessagePack deserialization + pyahocorasick automaton construction over ~64K compounds).
 
 ### Cache Behavior
 
 The `[f32; 207]` reef score array is 828 bytes — fits in L1 cache. No memory pressure during scoring. The word_reefs entries (~13 per word x 4 bytes = ~52 bytes) also fit in cache lines during iteration.
 
-### Bottleneck Analysis
+### Bottleneck Analysis (Pure Python)
 
-- **Aho-Corasick scan:** O(n) in text length, good cache behavior. Negligible for sentences.
-- **Snowball stemmer fallback:** ~200ns per word, fires ~30% of the time. Pre-expansion of morphy variants and snowball stems at export time reduces this to uncommon cases (proper nouns, neologisms, typos).
-- **HashMap lookups:** Dominant cost for long inputs. A perfect-hash function (e.g., `phf` crate in Rust) could reduce to ~20ns/word vs ~50ns for standard HashMap.
-- **Top-K extraction:** If only top-1 or top-3 is needed, a min-heap avoids sorting all 207 scores.
+- **Python loop overhead:** The dominant cost in pure Python. Individual operations (hash lookup ~50ns, stemmer ~120ns) are fast, but Python's per-iteration overhead (~1μs/word for tokenization, ~650ns/word for BM25) adds up.
+- **Result extraction:** ~25μs due to dataclass construction and Python sort over 207 elements — disproportionately expensive for short inputs.
+- **Background subtraction:** ~9μs for 207-element loop — trivial in Rust (~200ns) but meaningful in Python.
+- **Aho-Corasick scan:** O(n) in text length, implemented in C (pyahocorasick), fast even in Python (~1-3μs for sentences).
+- **Snowball stemmer fallback:** ~120ns per word (C extension), fires ~30% of the time. Pre-expansion of morphy variants and snowball stems at export time reduces this to uncommon cases.
+- **HashMap lookups:** ~50ns per lookup. Dominant cost for long inputs in Rust. In Python, the loop overhead around lookups is the real bottleneck.
+- **Startup:** ~1.5s is dominated by MessagePack deserialization of ~173K word_lookup entries and Aho-Corasick automaton construction over ~64K compounds.
 
 ---
 
@@ -882,7 +1002,7 @@ Split the Huck Finn passage at the midpoint:
 
 1. **Bag-of-words.** Word order is ignored. "Dog bites man" and "man bites dog" produce identical results.
 
-2. **Fixed vocabulary.** Neologisms, slang, brand names, and domain-specific jargon not in the vocabulary will be missed. The stemmer fallback helps with inflections but not with truly unknown words.
+2. **Fixed base vocabulary.** Neologisms, slang, brand names, and domain-specific jargon not in the base vocabulary will be missed. The stemmer fallback helps with inflections but not with truly unknown words. The vocabulary extension API (`add_custom_word()`) allows runtime injection of custom words with learned reef associations — see [Section 7](#7-api-surface).
 
 3. **Abstract domains are weak.** Software engineering, philosophy, and other highly abstract domains produce low-confidence results because their vocabulary spreads thinly across many reefs. The system's strength is concrete, domain-specific vocabulary (science, literature, physical descriptions).
 
@@ -890,7 +1010,7 @@ Split the Huck Finn passage at the midpoint:
 
 5. **English only.** The source vocabulary and embedding model are English-specific.
 
-6. **Static vocabulary.** The dictionary is frozen at build time. New words require a rebuild of the data files.
+6. **Static base vocabulary.** The base dictionary is frozen at build time. New base words require a rebuild of the data files. However, the vocabulary extension API allows injecting custom words at runtime with learned reef associations — useful for domain-specific corpora where the base vocabulary has gaps.
 
 7. **207-reef ceiling.** Topic detection granularity is bounded by the 207 reefs. Sub-reef distinctions (e.g., "organic chemistry" vs "inorganic chemistry" within a chemistry reef) are not possible.
 

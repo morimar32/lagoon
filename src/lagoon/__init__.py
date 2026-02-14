@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ._errors import LagoonChecksumError, LagoonError, LagoonVersionError
+from ._sentence import split_sentences
+from ._stop_words import STOP_WORDS
 from ._types import (
     DocumentAnalysis,
     IslandMeta,
@@ -30,11 +32,14 @@ __all__ = [
     "LagoonError",
     "LagoonVersionError",
     "ReefMeta",
+    "ReefScorer",
     "ScoredIsland",
     "ScoredReef",
+    "STOP_WORDS",
     "TopicResult",
     "TopicSegment",
     "WordInfo",
+    "split_sentences",
 ]
 
 
@@ -60,3 +65,12 @@ def load(data_dir: Path | str | None = None) -> "ReefScorer":
         compound_strings=data["compound_strings"],
         constants=data["constants"],
     )
+
+
+# Deferred import so ReefScorer is available as lagoon.ReefScorer
+# without circular import issues at module load time.
+def __getattr__(name: str):
+    if name == "ReefScorer":
+        from ._scorer import ReefScorer
+        return ReefScorer
+    raise AttributeError(f"module 'lagoon' has no attribute {name!r}")

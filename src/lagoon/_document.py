@@ -10,6 +10,7 @@ from ._types import DocumentAnalysis, TopicSegment
 
 if TYPE_CHECKING:
     from ._scorer import ReefScorer
+    from ._types import TopicResult
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -84,15 +85,85 @@ def _detect_boundaries(
     return boundaries
 
 
+def _enforce_max_size(
+    seg_starts: list[int],
+    n_sentences: int,
+    max_size: int,
+    similarities: list[float],
+) -> list[int]:
+    """Split oversized segments at weakest internal similarity boundaries."""
+    if max_size <= 0:
+        return seg_starts
+
+    current = list(seg_starts)
+    changed = True
+
+    while changed:
+        changed = False
+        new_starts: list[int] = []
+        for i in range(len(current)):
+            seg_start = current[i]
+            seg_end = current[i + 1] if i + 1 < len(current) else n_sentences
+            new_starts.append(seg_start)
+
+            if seg_end - seg_start <= max_size:
+                continue
+
+            # Find weakest similarity in [seg_start, seg_end - 1)
+            best_split = -1
+            min_sim = float("inf")
+            for j in range(seg_start, seg_end - 1):
+                if j < len(similarities) and similarities[j] < min_sim:
+                    min_sim = similarities[j]
+                    best_split = j + 1  # split after sentence j
+
+            if best_split > seg_start and best_split < seg_end:
+                new_starts.append(best_split)
+                changed = True
+
+        current = sorted(set(new_starts))
+
+    return current
+
+
+def _enforce_min_size(
+    seg_starts: list[int],
+    n_sentences: int,
+    min_size: int,
+) -> list[int]:
+    """Merge undersized segments with their predecessors."""
+    if min_size <= 1:
+        return seg_starts
+
+    merged = [seg_starts[0]]
+    for i in range(1, len(seg_starts)):
+        prev_start = merged[-1]
+        if seg_starts[i] - prev_start >= min_size:
+            merged.append(seg_starts[i])
+
+    return merged
+
+
 def analyze_document(
     scorer: ReefScorer,
     text: str | list[str],
     *,
     sensitivity: float = 1.0,
     smooth_window: int = 2,
-    min_segment_sentences: int = 1,
+    min_chunk_sentences: int = 2,
+    max_chunk_sentences: int = 30,
 ) -> DocumentAnalysis:
-    """Segment a document by topic shifts."""
+    """Segment a document by topic shifts with chunk size constraints.
+
+    Args:
+        scorer: The ReefScorer instance.
+        text: Raw text or pre-split list of sentences.
+        sensitivity: Boundary detection threshold. Lower = more boundaries.
+        smooth_window: Sliding window size for z-score vector smoothing.
+        min_chunk_sentences: Minimum sentences per chunk (merge undersized).
+        max_chunk_sentences: Maximum sentences per chunk (split oversized).
+            Set to 0 to disable maximum size enforcement.
+    """
     # Step 1: Sentence segmentation
     if isinstance(text, list):
         sentences = text
@@ -107,16 +178,25 @@ def analyze_document(
     n = len(sentences)
 
     if n == 1:
-        topic = scorer.score(sentences[0])
+        _, topic = scorer._score_full(sentences[0])
         seg = TopicSegment(
-            sentences=sentences, start_idx=0, end_idx=0, topic=topic,
+            sentences=sentences,
+            start_idx=0,
+            end_idx=0,
+            topic=topic,
+            sentence_results=[topic],
         )
         return DocumentAnalysis(
             segments=[seg], n_sentences=1, n_segments=1, boundaries=[],
         )
 
-    # Step 2: Per-sentence z-score vectors
-    vectors = [scorer.score_raw(s) for s in sentences]
+    # Step 2: Per-sentence scoring (z-vectors + TopicResults in one pass)
+    vectors: list[list[float]] = []
+    sentence_results: list[TopicResult] = []
+    for s in sentences:
+        z, tr = scorer._score_full(s)
+        vectors.append(z)
+        sentence_results.append(tr)
 
     # Step 3: Smoothing
     smoothed = _smooth_vectors(vectors, smooth_window)
@@ -130,35 +210,37 @@ def analyze_document(
     # Step 5: Boundary detection
     boundaries = _detect_boundaries(similarities, sensitivity)
 
-    # Step 6: Assemble segments
-    # Boundaries are sentence indices where a new segment starts
+    # Step 6: Assemble initial segment starts
     seg_starts = [0] + sorted(boundaries)
-    # Remove duplicates and ensure within range
     seg_starts = sorted(set(s for s in seg_starts if 0 <= s < n))
     if not seg_starts or seg_starts[0] != 0:
         seg_starts = [0] + seg_starts
 
-    # Merge tiny segments if needed
-    if min_segment_sentences > 1:
-        merged = [seg_starts[0]]
-        for i in range(1, len(seg_starts)):
-            prev_start = merged[-1]
-            if seg_starts[i] - prev_start >= min_segment_sentences:
-                merged.append(seg_starts[i])
-        seg_starts = merged
+    # Step 7: Enforce max chunk size (split oversized segments)
+    seg_starts = _enforce_max_size(
+        seg_starts, n, max_chunk_sentences, similarities,
+    )
 
-    # Step 7: Build TopicSegments by re-scoring concatenated text
+    # Step 8: Enforce min chunk size (merge undersized segments)
+    seg_starts = _enforce_min_size(seg_starts, n, min_chunk_sentences)
+
+    # Step 9: Build TopicSegments with per-sentence results
     segments: list[TopicSegment] = []
     for i, start in enumerate(seg_starts):
         end = seg_starts[i + 1] - 1 if i + 1 < len(seg_starts) else n - 1
         seg_sentences = sentences[start : end + 1]
+        seg_sentence_results = sentence_results[start : end + 1]
+
+        # Segment-level topic: re-score the combined text
         combined = " ".join(seg_sentences)
         topic = scorer.score(combined)
+
         segments.append(TopicSegment(
             sentences=seg_sentences,
             start_idx=start,
             end_idx=end,
             topic=topic,
+            sentence_results=seg_sentence_results,
         ))
 
     # Actual boundaries are the starts of segments after the first

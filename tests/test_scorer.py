@@ -7,6 +7,7 @@ def test_empty_string(scorer):
     assert result.confidence == 0.0
     assert result.matched_words == 0
     assert result.top_reefs == []
+    assert result.matched_word_ids == frozenset()
 
 
 def test_all_unknown_words(scorer):
@@ -16,6 +17,7 @@ def test_all_unknown_words(scorer):
     assert result.matched_words == 0
     assert len(result.unknown_words) == 4
     assert result.coverage == 0.0
+    assert result.matched_word_ids == frozenset()
 
 
 def test_single_word(scorer):
@@ -24,6 +26,7 @@ def test_single_word(scorer):
     assert result.matched_words == 1
     assert result.coverage == 1.0
     assert len(result.top_reefs) > 0
+    assert len(result.matched_word_ids) == 1
 
 
 def test_result_structure(scorer):
@@ -34,6 +37,8 @@ def test_result_structure(scorer):
     assert isinstance(result.coverage, float)
     assert isinstance(result.matched_words, int)
     assert isinstance(result.unknown_words, list)
+    assert isinstance(result.matched_word_ids, frozenset)
+    assert len(result.matched_word_ids) > 0
     for reef in result.top_reefs:
         assert hasattr(reef, "reef_id")
         assert hasattr(reef, "z_score")
@@ -55,6 +60,7 @@ def test_score_batch(scorer):
     assert len(results) == 3
     for r in results:
         assert hasattr(r, "top_reefs")
+        assert hasattr(r, "matched_word_ids")
 
 
 def test_top_k(scorer):
@@ -163,3 +169,22 @@ def test_background_subtraction_effect(scorer):
     raw_order = [r.reef_id for r in raw_ranking]
     z_order = [r.reef_id for r in z_ranking]
     assert raw_order != z_order
+
+
+# --- Stop word filtering ---
+
+def test_stop_words_filtered_from_unknown(scorer):
+    """Stop words should not appear in unknown_words even if not in dictionary."""
+    # Mix of unknown nonsense + stop words that might not be in dictionary
+    result = scorer.score("xyzzy the plugh and qwerty")
+    # "the" and "and" are stop words — should not be in unknown_words
+    for w in result.unknown_words:
+        assert w not in ("the", "and", "a", "is")
+
+
+# --- matched_word_ids ---
+
+def test_matched_word_ids_consistency(scorer):
+    """matched_word_ids should have exactly matched_words unique IDs."""
+    result = scorer.score("neuron cortex brain")
+    assert len(result.matched_word_ids) == result.matched_words

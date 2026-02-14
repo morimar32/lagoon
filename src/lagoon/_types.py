@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -56,6 +56,7 @@ class TopicResult:
     coverage: float
     matched_words: int
     unknown_words: list[str]
+    matched_word_ids: frozenset[int] = field(default_factory=frozenset)
 
 
 @dataclass(slots=True, frozen=True)
@@ -64,6 +65,7 @@ class TopicSegment:
     start_idx: int
     end_idx: int    # inclusive
     topic: TopicResult
+    sentence_results: list[TopicResult] = field(default_factory=list)
 
 
 @dataclass(slots=True, frozen=True)

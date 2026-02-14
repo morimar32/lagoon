@@ -36,7 +36,8 @@ print(result.top_reefs[0].z_score)    # 4.46
 print(result.confidence)               # 2.11
 print(result.coverage)                 # 1.0 (all words matched)
 print(result.matched_words)            # 7
-print(result.unknown_words)            # []
+print(result.unknown_words)            # [] (stop words excluded automatically)
+print(len(result.matched_word_ids))    # 7 (set of word_ids that matched)
 ```
 
 ### What's in a TopicResult
@@ -49,7 +50,8 @@ print(result.unknown_words)            # []
 | `confidence` | `float` | Gap between #1 and #2 reef z-scores |
 | `coverage` | `float` | Fraction of input words found in the dictionary |
 | `matched_words` | `int` | Number of words that hit the dictionary |
-| `unknown_words` | `list[str]` | Words that failed lookup + stemmer fallback |
+| `unknown_words` | `list[str]` | Words that failed lookup + stemmer fallback (stop words excluded) |
+| `matched_word_ids` | `frozenset[int]` | Set of word_ids that matched (for cross-referencing) |
 
 Each `ScoredReef` has:
 
@@ -101,7 +103,7 @@ Specificity ranges from -2 (very universal) to +2 (very specific). High-specific
 
 ## Document topic segmentation
 
-`scorer.analyze()` splits a document into topic-coherent segments. It works by computing z-score vectors per sentence, measuring cosine similarity between adjacent sentences, and detecting valleys (topic shifts).
+`scorer.analyze()` splits a document into topic-coherent segments. It scores each sentence to get z-score vectors and per-sentence `TopicResult` objects in a single pass, measures cosine similarity between adjacent smoothed vectors, detects valleys (topic shifts), and enforces chunk size constraints.
 
 ### From a string
 
@@ -124,6 +126,20 @@ for seg in analysis.segments:
     print(f"Sentences {seg.start_idx}-{seg.end_idx}: {seg.topic.top_reefs[0].name}")
     # Segment 0: neuroscience-related reef
     # Segment 1: finance-related reef
+```
+
+### Per-sentence results
+
+Each segment includes `sentence_results` — per-sentence `TopicResult` objects with `matched_word_ids`, `unknown_words`, `top_reefs`, and `coverage`:
+
+```python
+for seg in analysis.segments:
+    for i, sr in enumerate(seg.sentence_results):
+        print(f"  Sentence {seg.start_idx + i}: "
+              f"{sr.matched_words} matched, "
+              f"{len(sr.unknown_words)} unknown, "
+              f"top reef: {sr.top_reefs[0].name if sr.top_reefs else 'none'}")
+        print(f"    matched_word_ids: {sr.matched_word_ids}")
 ```
 
 ### From pre-segmented sentences
@@ -151,8 +167,100 @@ analysis = scorer.analyze(doc, sensitivity=0.5)
 # Smoothing window (default 2): larger = smoother, fewer false splits
 analysis = scorer.analyze(doc, smooth_window=3)
 
-# Minimum sentences per segment
-analysis = scorer.analyze(doc, min_segment_sentences=2)
+# Minimum sentences per segment (default 2): merge small segments
+analysis = scorer.analyze(doc, min_chunk_sentences=2)
+
+# Maximum sentences per segment (default 30): split large segments
+analysis = scorer.analyze(doc, max_chunk_sentences=15)
+
+# Disable maximum size enforcement
+analysis = scorer.analyze(doc, max_chunk_sentences=0)
+```
+
+## Stop words and filtering unknown words
+
+Lagoon automatically excludes ~130 English stop words (determiners, conjunctions, prepositions, etc.) from `unknown_words` in scoring results — they carry no topical signal.
+
+```python
+from lagoon import STOP_WORDS
+
+print("the" in STOP_WORDS)   # True
+print("neuron" in STOP_WORDS) # False
+```
+
+Use `filter_unknown()` to batch-identify vocabulary gaps (stop words excluded):
+
+```python
+unknowns = scorer.filter_unknown(["kubernetes", "brain", "terraform", "the", "xyzzy"])
+print(unknowns)  # ["kubernetes", "terraform", "xyzzy"]
+# "brain" is known, "the" is a stop word — both excluded
+```
+
+## Vocabulary extension
+
+Lagoon's base vocabulary (~147K words) can be extended at runtime with custom words. This is the primary API for downstream vocabulary learning systems.
+
+### Add a custom word
+
+```python
+from lagoon._types import WordInfo
+
+# Define reef associations: (reef_id, strength) where strength is 0.0-1.0
+info = scorer.add_custom_word(
+    "kubernetes",
+    reef_associations=[(42, 0.9), (17, 0.5)],
+    specificity=2,  # default: highly specific
+)
+
+print(info.word_id)       # next available word_id
+print(info.idf_q)         # quantized IDF (u8)
+print(info.specificity)   # 2
+
+# Word is now immediately scorable
+result = scorer.score("kubernetes")
+print(result.matched_words)   # 1
+print(result.coverage)        # 1.0
+```
+
+### Compute BM25 scores without injecting
+
+```python
+idf_q, reef_scores = scorer.compute_custom_word_scores(
+    n_associated_reefs=3,
+    associations=[(42, 1.0), (17, 0.6), (103, 0.3)],
+)
+print(idf_q)         # quantized IDF (u8, high value = specific)
+print(reef_scores)   # [(42, bm25_q), (17, bm25_q), (103, bm25_q)]
+```
+
+### Add custom compound words
+
+```python
+# First add individual words
+info1 = scorer.add_custom_word("zorblax", reef_associations=[(42, 0.8)])
+info2 = scorer.add_custom_word("frimble", reef_associations=[(17, 0.7)])
+
+# Add the compound
+compound_info = scorer.add_custom_word(
+    "zorblax frimble",
+    reef_associations=[(42, 0.95), (17, 0.85)],
+)
+
+# Rebuild automaton to match the new compound
+scorer.rebuild_compounds([("zorblax frimble", compound_info.word_id)])
+```
+
+### Validation
+
+All inputs are validated with clear `ValueError` messages:
+
+```python
+scorer.add_custom_word("brain", ...)           # ValueError: already exists
+scorer.add_custom_word("", ...)                # ValueError: must not be empty
+scorer.add_custom_word("x", ..., specificity=5) # ValueError: specificity
+scorer.add_custom_word("x", reef_associations=[]) # ValueError: must not be empty
+scorer.add_custom_word("x", reef_associations=[(999, 0.5)]) # ValueError: reef_id out of range
+scorer.add_custom_word("x", reef_associations=[(42, 2.0)])  # ValueError: strength must be in
 ```
 
 ## Edge cases

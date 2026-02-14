@@ -20,5 +20,10 @@ dev = [
     "pytest-benchmark",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "benchmark: performance benchmarks (deselect with '-m not benchmark')",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/lagoon"]
