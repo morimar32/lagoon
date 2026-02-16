@@ -149,3 +149,46 @@ def test_max_chunk_sentences_disabled(scorer):
     # With no max and high sensitivity (few boundaries), could be one big segment
     total = sum(len(seg.sentences) for seg in result.segments)
     assert total == 50
+
+
+# --- min_reef_z tests ---
+
+def test_analyze_min_reef_z_default(scorer):
+    """Default min_reef_z=2.0 should filter segment reefs to z >= 2.0."""
+    sentences = [
+        "The neuron transmits electrical signals through the axon to the synapse.",
+        "Dendrites receive signals from neighboring neurons in the cortex.",
+        "The hippocampus plays a crucial role in memory formation and recall.",
+    ]
+    result = scorer.analyze(sentences, min_chunk_sentences=1)
+    for seg in result.segments:
+        for reef in seg.topic.top_reefs:
+            assert reef.z_score >= 2.0
+
+
+def test_analyze_min_reef_z_custom(scorer):
+    """Custom min_reef_z threshold should be respected."""
+    sentences = [
+        "The neuron transmits electrical signals through the axon to the synapse.",
+        "Dendrites receive signals from neighboring neurons in the cortex.",
+        "The hippocampus plays a crucial role in memory formation and recall.",
+    ]
+    threshold = 5.0
+    result = scorer.analyze(sentences, min_chunk_sentences=1, min_reef_z=threshold)
+    for seg in result.segments:
+        for reef in seg.topic.top_reefs:
+            assert reef.z_score >= threshold
+
+
+def test_analyze_sentence_results_use_min_reef_z(scorer):
+    """Per-sentence results should also be filtered by min_reef_z."""
+    sentences = [
+        "The neuron transmits electrical signals through the axon to the synapse.",
+        "Dendrites receive signals from neighboring neurons in the cortex.",
+    ]
+    threshold = 3.0
+    result = scorer.analyze(sentences, min_chunk_sentences=1, min_reef_z=threshold)
+    for seg in result.segments:
+        for sr in seg.sentence_results:
+            for reef in sr.top_reefs:
+                assert reef.z_score >= threshold

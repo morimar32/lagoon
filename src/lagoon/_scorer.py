@@ -65,16 +65,16 @@ class ReefScorer:
 
     # -- Public scoring API --
 
-    def score(self, text: str, top_k: int = 10) -> TopicResult:
+    def score(self, text: str, top_k: int = 10, *, min_reef_z: float | None = None) -> TopicResult:
         """Score a single text string through the full 5-phase pipeline."""
         word_ids, unknown = self._tokenizer.process(text)
-        return self._score_from_ids(word_ids, unknown, top_k)
+        return self._score_from_ids(word_ids, unknown, top_k, min_reef_z)
 
     def score_batch(
-        self, texts: list[str], top_k: int = 10
+        self, texts: list[str], top_k: int = 10, *, min_reef_z: float | None = None,
     ) -> list[TopicResult]:
         """Score multiple texts."""
-        return [self.score(t, top_k) for t in texts]
+        return [self.score(t, top_k, min_reef_z=min_reef_z) for t in texts]
 
     def lookup_word(self, word: str) -> WordInfo | None:
         """Look up a single word with the same normalization as scoring."""
@@ -117,6 +117,7 @@ class ReefScorer:
         smooth_window: int = 2,
         min_chunk_sentences: int = 2,
         max_chunk_sentences: int = 30,
+        min_reef_z: float = 2.0,
     ) -> DocumentAnalysis:
         """Document-level topic segmentation with chunk size constraints.
 
@@ -127,6 +128,8 @@ class ReefScorer:
             min_chunk_sentences: Minimum sentences per chunk (merge small segments).
             max_chunk_sentences: Maximum sentences per chunk (split large segments).
                 Set to 0 to disable maximum size enforcement.
+            min_reef_z: Minimum z-score threshold for reef inclusion. Only reefs
+                with z >= min_reef_z are returned, replacing fixed top-k.
         """
         return analyze_document(
             self, text,
@@ -134,6 +137,7 @@ class ReefScorer:
             smooth_window=smooth_window,
             min_chunk_sentences=min_chunk_sentences,
             max_chunk_sentences=max_chunk_sentences,
+            min_reef_z=min_reef_z,
         )
 
     # -- Vocabulary extension API --
@@ -372,7 +376,8 @@ class ReefScorer:
     # -- Internal methods --
 
     def _score_full(
-        self, text: str, top_k: int = 10
+        self, text: str, top_k: int = 10,
+        min_reef_z: float | None = None,
     ) -> tuple[list[float], TopicResult]:
         """Score and return both the z-score vector and TopicResult.
 
@@ -402,11 +407,12 @@ class ReefScorer:
         raw = [sq / 8192.0 for sq in scores_q]
         raw = self._propagate(raw)
         z = self._subtract_background(raw)
-        tr = self._extract_results(z, raw, word_counts, word_ids, unknown, top_k)
+        tr = self._extract_results(z, raw, word_counts, word_ids, unknown, top_k, min_reef_z)
         return z, tr
 
     def _score_from_ids(
-        self, word_ids: set[int], unknown: list[str], top_k: int
+        self, word_ids: set[int], unknown: list[str], top_k: int,
+        min_reef_z: float | None = None,
     ) -> TopicResult:
         """Phases 3-5: accumulate, subtract background, extract results."""
         n = self._n_reefs
@@ -440,7 +446,7 @@ class ReefScorer:
         # Phase 5: Result extraction
         return self._extract_results(
             z_scores, raw_scores, word_counts,
-            word_ids, unknown, top_k,
+            word_ids, unknown, top_k, min_reef_z,
         )
 
     def _accumulate_bm25(
@@ -492,12 +498,18 @@ class ReefScorer:
         matched: set[int],
         unknown: list[str],
         top_k: int,
+        min_reef_z: float | None = None,
     ) -> TopicResult:
         """Phase 5: Extract top-K reefs, islands, archipelago rollup."""
         # Sort all 207 by z-score descending
         indexed = sorted(
             range(self._n_reefs), key=lambda i: z_scores[i], reverse=True,
         )
+
+        if min_reef_z is not None:
+            selected = [i for i in indexed if z_scores[i] >= min_reef_z]
+        else:
+            selected = indexed[:top_k]
 
         reef_meta = self._reef_meta
         top_reefs = [
@@ -508,7 +520,7 @@ class ReefScorer:
                 n_contributing_words=word_counts[i],
                 name=reef_meta[i].name,
             )
-            for i in indexed[:top_k]
+            for i in selected
         ]
 
         # Confidence: gap between #1 and #2
@@ -523,9 +535,9 @@ class ReefScorer:
         # Filter stop words from unknown list
         filtered_unknown = [w for w in unknown if w not in STOP_WORDS]
 
-        # Island rollup from ALL reefs (not just top-K)
+        # Island rollup from selected reefs
         island_agg: dict[int, list[float | int]] = defaultdict(lambda: [0.0, 0])
-        for i in indexed[:top_k]:
+        for i in selected:
             iid = reef_meta[i].island_id
             island_agg[iid][0] += z_scores[i]
             island_agg[iid][1] += 1

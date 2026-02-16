@@ -189,3 +189,71 @@ def test_matched_word_ids_consistency(scorer):
     """matched_word_ids should have exactly matched_words unique IDs."""
     result = scorer.score("neuron cortex brain")
     assert len(result.matched_word_ids) == result.matched_words
+
+
+# --- min_reef_z tests ---
+
+def test_min_reef_z_overrides_top_k(scorer):
+    """All returned reefs should have z >= threshold when min_reef_z is set."""
+    threshold = 2.0
+    result = scorer.score(
+        "neuron synapse axon dendrite cortex brain neural hippocampus",
+        min_reef_z=threshold,
+    )
+    for reef in result.top_reefs:
+        assert reef.z_score >= threshold
+
+
+def test_min_reef_z_empty_result(scorer):
+    """Very high threshold should produce empty top_reefs."""
+    result = scorer.score(
+        "neuron synapse axon dendrite cortex brain neural hippocampus",
+        min_reef_z=999.0,
+    )
+    assert result.top_reefs == []
+
+
+def test_min_reef_z_none_preserves_top_k(scorer):
+    """Default None keeps top-k behavior."""
+    result = scorer.score(
+        "neuron synapse axon dendrite cortex brain neural hippocampus",
+    )
+    assert len(result.top_reefs) == 10
+
+
+def test_min_reef_z_reefs_sorted_descending(scorer):
+    """Results with min_reef_z should remain sorted by z-score descending."""
+    result = scorer.score(
+        "neuron synapse axon dendrite cortex brain neural hippocampus",
+        min_reef_z=1.0,
+    )
+    for i in range(len(result.top_reefs) - 1):
+        assert result.top_reefs[i].z_score >= result.top_reefs[i + 1].z_score
+
+
+def test_min_reef_z_island_rollup_matches_selected(scorer):
+    """Island contributing count should equal len(top_reefs)."""
+    result = scorer.score(
+        "neuron synapse axon dendrite cortex brain neural hippocampus",
+        min_reef_z=2.0,
+    )
+    total_contributing = sum(isl.n_contributing_reefs for isl in result.top_islands)
+    assert total_contributing == len(result.top_reefs)
+
+
+def test_score_batch_with_min_reef_z(scorer):
+    """Batch should pass through min_reef_z threshold."""
+    threshold = 3.0
+    results = scorer.score_batch(
+        ["neuron synapse cortex brain", "ocean waves tide current"],
+        min_reef_z=threshold,
+    )
+    for result in results:
+        for reef in result.top_reefs:
+            assert reef.z_score >= threshold
+
+
+def test_min_reef_z_backward_compat(scorer):
+    """score() without min_reef_z should still return exactly 10 reefs."""
+    result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
+    assert len(result.top_reefs) == 10

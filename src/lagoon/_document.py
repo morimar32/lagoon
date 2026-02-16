@@ -152,6 +152,7 @@ def analyze_document(
     smooth_window: int = 2,
     min_chunk_sentences: int = 2,
     max_chunk_sentences: int = 30,
+    min_reef_z: float = 2.0,
 ) -> DocumentAnalysis:
     """Segment a document by topic shifts with chunk size constraints.
 
@@ -178,7 +179,7 @@ def analyze_document(
     n = len(sentences)
 
     if n == 1:
-        _, topic = scorer._score_full(sentences[0])
+        _, topic = scorer._score_full(sentences[0], min_reef_z=min_reef_z)
         seg = TopicSegment(
             sentences=sentences,
             start_idx=0,
@@ -194,7 +195,7 @@ def analyze_document(
     vectors: list[list[float]] = []
     sentence_results: list[TopicResult] = []
     for s in sentences:
-        z, tr = scorer._score_full(s)
+        z, tr = scorer._score_full(s, min_reef_z=min_reef_z)
         vectors.append(z)
         sentence_results.append(tr)
 
@@ -233,7 +234,7 @@ def analyze_document(
 
         # Segment-level topic: re-score the combined text
         combined = " ".join(seg_sentences)
-        topic = scorer.score(combined)
+        topic = scorer.score(combined, min_reef_z=min_reef_z)
 
         segments.append(TopicSegment(
             sentences=seg_sentences,
