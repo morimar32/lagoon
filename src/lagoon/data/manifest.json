@@ -1,7 +1,8 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "format": "msgpack",
-  "build_timestamp": "2026-02-13T06:09:55Z",
+  "v2_format": "flat_binary",
+  "build_timestamp": "2026-02-15T18:14:55Z",
   "files": {
     "word_lookup.bin": "697bdd018bd217071fc3bae9c3801be6f7728e789a62d0867cd3e67aa6429bc8",
     "word_reefs.bin": "dcf6b07eaed813e614a8a2cff60a1779beffffd318776b5647dafd6a2bf0bb90",
@@ -9,7 +10,18 @@
     "island_meta.bin": "f8c2ac4e7592f94df78951da96c7e7946618a3d4f9c9cc8e5dec0ed2899cf9df",
     "background.bin": "bf7326be08cea90c774c2ee4d111dbd55f1692a258aa351ff96edfe22916e8d0",
     "compounds.bin": "af823a106bfa6911f0547c83c4664b581ce6381ee104745293f82ef927842fdc",
-    "constants.bin": "f99649fe65bd892198bfbed978a5b90fb8337cd764ab05ad0da679b638fa4a05"
+    "constants.bin": "f99649fe65bd892198bfbed978a5b90fb8337cd764ab05ad0da679b638fa4a05",
+    "reef_edges.bin": "a743c470df24f82f4daac71066c7cf067f3d12b62cc3d067b31127ed17f2e55b"
+  },
+  "v2_files": {
+    "word_lookup.bin": "2dfe661174c258ab75d413f89f2c9a34a64b46cd25149e5512e6f31bf5d97545",
+    "word_reefs.bin": "cae0485f12a4bfe8aa429f55ceb41e63ca202738f7fc5925c3a250036b24db41",
+    "reef_meta.bin": "2272ccd1507d3c290d59c9d218f52a8a3defa848459eebfe1a44598a4c0a29c0",
+    "island_meta.bin": "797752d5750b80b3416007f90efba053fb9e87e6e4267b7859d0bff75ae7a79b",
+    "background.bin": "826964553fb3b4de3b136f2b70ca67d071c3d0b48414332e3b7c94a73980f7a7",
+    "compounds.bin": "ff129029db113b2ae2a8511029d484d07f9a2bd644d385db504863625cdb919d",
+    "constants.bin": "30d9af2b78abd5fe11473273bdc541a4ce30623bf7a1b9680e5cbc1567b1781c",
+    "reef_edges.bin": "ea97c16d1319887a1dc276d85e9f1fed4dc07a0e547c35e52902dd5071f41066"
   },
   "stats": {
     "n_reefs": 207,
@@ -18,6 +30,8 @@
     "n_words": 146698,
     "n_lookup_entries": 173286,
     "n_words_with_reefs": 146695,
-    "n_compounds": 63912
+    "n_compounds": 63912,
+    "n_edges": 3925,
+    "edge_weight_threshold": 0.01
   }
 }

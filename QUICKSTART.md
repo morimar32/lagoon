@@ -32,12 +32,12 @@ Pass any text to `scorer.score()` and get back a `TopicResult`:
 result = scorer.score("photosynthesis chlorophyll leaf plant sunlight carbon dioxide")
 
 print(result.top_reefs[0].name)       # "botanical classification systems"
-print(result.top_reefs[0].z_score)    # 4.46
-print(result.confidence)               # 2.11
+print(result.top_reefs[0].z_score)    # 5.87
+print(result.confidence)               # 2.63
 print(result.coverage)                 # 1.0 (all words matched)
-print(result.matched_words)            # 7
+print(result.matched_words)            # 6
 print(result.unknown_words)            # [] (stop words excluded automatically)
-print(len(result.matched_word_ids))    # 7 (set of word_ids that matched)
+print(len(result.matched_word_ids))    # 6 (set of word_ids that matched)
 ```
 
 ### What's in a TopicResult

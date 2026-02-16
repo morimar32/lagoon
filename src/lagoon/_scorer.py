@@ -30,6 +30,7 @@ class ReefScorer:
         "_word_lookup", "_word_reefs", "_reef_meta", "_island_meta",
         "_bg_mean", "_bg_std", "_tokenizer", "_n_reefs",
         "_reef_total_dims", "_reef_n_words", "_avg_reef_words",
+        "_reef_edges",
     )
 
     def __init__(
@@ -44,6 +45,7 @@ class ReefScorer:
         compound_word_ids: list[int],
         compound_strings: list[str],
         constants: dict,
+        reef_edges: list[tuple[int, int, float]] | None = None,
     ) -> None:
         self._word_lookup = word_lookup
         self._word_reefs = word_reefs
@@ -55,6 +57,7 @@ class ReefScorer:
         self._reef_total_dims = constants["reef_total_dims"]
         self._reef_n_words = constants["reef_n_words"]
         self._avg_reef_words = constants["avg_reef_words"]
+        self._reef_edges = reef_edges if reef_edges else []
 
         self._tokenizer = Tokenizer(
             word_lookup, compound_ac, compound_word_ids, compound_strings,
@@ -103,6 +106,7 @@ class ReefScorer:
             return [0.0] * self._n_reefs
         scores_q, _ = self._accumulate_bm25(word_ids)
         raw = [sq / 8192.0 for sq in scores_q]
+        raw = self._propagate(raw)
         return self._subtract_background(raw)
 
     def analyze(
@@ -396,6 +400,7 @@ class ReefScorer:
 
         scores_q, word_counts = self._accumulate_bm25(word_ids)
         raw = [sq / 8192.0 for sq in scores_q]
+        raw = self._propagate(raw)
         z = self._subtract_background(raw)
         tr = self._extract_results(z, raw, word_counts, word_ids, unknown, top_k)
         return z, tr
@@ -426,6 +431,9 @@ class ReefScorer:
         # Dequantize once
         raw_scores = [sq / 8192.0 for sq in scores_q]
 
+        # Propagate through reef edges
+        raw_scores = self._propagate(raw_scores)
+
         # Phase 4: Background subtraction
         z_scores = self._subtract_background(raw_scores)
 
@@ -450,6 +458,15 @@ class ReefScorer:
                 word_counts[reef_id] += 1
 
         return scores_q, word_counts
+
+    def _propagate(self, raw_scores: list[float]) -> list[float]:
+        """Propagate scores through reef edges (single-hop, additive)."""
+        if not self._reef_edges:
+            return raw_scores
+        propagated = list(raw_scores)
+        for src, tgt, w in self._reef_edges:
+            propagated[tgt] += raw_scores[src] * w
+        return propagated
 
     def _subtract_background(self, raw_scores: list[float]) -> list[float]:
         """Phase 4: Convert raw BM25 to z-scores."""

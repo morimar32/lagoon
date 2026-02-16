@@ -64,6 +64,7 @@ def load(data_dir: Path | str | None = None) -> "ReefScorer":
         compound_word_ids=data["compound_word_ids"],
         compound_strings=data["compound_strings"],
         constants=data["constants"],
+        reef_edges=data["reef_edges"],
     )
 
 

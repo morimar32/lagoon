@@ -14,7 +14,7 @@ import msgpack
 from ._errors import LagoonChecksumError, LagoonError, LagoonVersionError
 from ._types import IslandMeta, ReefMeta, WordInfo
 
-_EXPECTED_VERSION = "1.0"
+_EXPECTED_VERSION = "1.1"
 
 _DATA_FILES = (
     "word_lookup.bin",
@@ -24,6 +24,7 @@ _DATA_FILES = (
     "background.bin",
     "compounds.bin",
     "constants.bin",
+    "reef_edges.bin",
 )
 
 
@@ -142,6 +143,12 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
     # constants
     constants = _load_msgpack(data_dir / "constants.bin")
 
+    # reef_edges: list of [src, tgt, weight] triplets
+    raw_edges = _load_msgpack(data_dir / "reef_edges.bin")
+    reef_edges: list[tuple[int, int, float]] = [
+        (e[0], e[1], e[2]) for e in raw_edges
+    ]
+
     return {
         "word_lookup": word_lookup,
         "word_reefs": word_reefs,
@@ -153,4 +160,5 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
         "compound_word_ids": compound_word_ids,
         "compound_strings": compound_strings,
         "constants": constants,
+        "reef_edges": reef_edges,
     }

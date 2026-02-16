@@ -23,6 +23,7 @@ def test_load_default():
     assert "bg_std" in data
     assert "compound_ac" in data
     assert "constants" in data
+    assert "reef_edges" in data
 
 
 def test_load_explicit_path():
@@ -63,6 +64,21 @@ def test_island_meta_fields():
     assert hasattr(im, "arch_id")
     assert hasattr(im, "name")
     assert im.island_id == 0
+
+
+def test_reef_edges():
+    """reef_edges should have 3925 valid (src, tgt, weight) entries."""
+    data = load_data()
+    edges = data["reef_edges"]
+    assert len(edges) == 3925
+    n_reefs = len(data["reef_meta"])
+    for src, tgt, weight in edges:
+        assert isinstance(src, int)
+        assert isinstance(tgt, int)
+        assert isinstance(weight, float)
+        assert 0 <= src < n_reefs
+        assert 0 <= tgt < n_reefs
+        assert weight > 0.0
 
 
 def test_missing_directory():
