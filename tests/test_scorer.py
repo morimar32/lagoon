@@ -112,9 +112,9 @@ def test_canonical_neuroscience(scorer):
     # All words should match (100% coverage)
     assert result.coverage == 1.0
     assert result.matched_words == 8
-    # "neurological diseases and tumors" should appear in top results
+    # "diseases and tumors" should appear in top results
     neuro = next(
-        (r for r in result.top_reefs if "neurological" in r.name), None
+        (r for r in result.top_reefs if "diseases and tumors" in r.name), None
     )
     assert neuro is not None
     assert neuro.n_contributing_words >= 4
@@ -255,3 +255,24 @@ def test_min_reef_z_backward_compat(scorer):
     """score() without min_reef_z should still return exactly 10 reefs."""
     result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
     assert len(result.top_reefs) == 10
+
+
+def test_epsilon_bg_std_no_absurd_z_scores(scorer):
+    """Reefs with epsilon bg_std (1e-6) must not produce absurd z-scores.
+
+    Reefs 107, 159, 263 are tiny (7-14 words) and have bg_std=1e-6 from
+    the export pipeline's epsilon floor. The scorer should treat these as
+    having no background distribution rather than dividing by 1e-6.
+    """
+    # Use a broad query that could activate many reefs
+    result = scorer.score(
+        "the law court judge attorney contract finance stock bond",
+        top_k=283,
+    )
+    epsilon_reefs = {107, 159, 263}
+    for reef in result.top_reefs:
+        if reef.reef_id in epsilon_reefs:
+            assert reef.z_score == 0.0, (
+                f"reef {reef.reef_id} ({reef.name}): z_score={reef.z_score} "
+                f"should be 0.0 for epsilon bg_std reef"
+            )

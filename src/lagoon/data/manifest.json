@@ -2,22 +2,22 @@
   "version": "2.0",
   "format": "msgpack",
   "v2_format": "flat_binary",
-  "build_timestamp": "2026-02-17T03:46:46Z",
+  "build_timestamp": "2026-02-17T05:30:40Z",
   "files": {
     "word_lookup.bin": "e4a68f2a6a4c9370a4decc53ace52b277ca513ec1a983afa2b0dff331ed23363",
     "word_reefs.bin": "da407a7715b8297d226d803db297ac56c3bc29aee46940db6afb67e824699c38",
-    "reef_meta.bin": "20400113f2e059ee5e9fff68fa875a1357a1118241ca4d744f6a01185a48016c",
-    "island_meta.bin": "a924f628875636c449946fce233ce0394d634ce5fc0a1051b97da48b3cb0bb73",
+    "reef_meta.bin": "349d479be5c3810b71738847fb6c721c6ca189a65e259b275c5315726ab03e85",
+    "island_meta.bin": "548a4c7bee0adf25f26b93aabda6d1426f6dbe1fd7f30d42c88dfc8dfbbc2710",
     "background.bin": "6c726403cbbcbca6530572e3b784e18e62feaa956e90a31e0bd0411b7bccdfa2",
     "compounds.bin": "af823a106bfa6911f0547c83c4664b581ce6381ee104745293f82ef927842fdc",
     "constants.bin": "7c61136f862a3f22aad104347066905756b3417819cf8134ed6f0acf7c22c2b5",
-    "reef_edges.bin": "7360a0c5956f685967fae82aecb7d7c8bbdfb2314c3143b3cf25929081c84761"
+    "reef_edges.bin": "773de808f0caf2167b4321828d38976a50d396f7349614580a411bc35d70c450"
   },
   "v2_files": {
     "word_lookup.bin": "b4af669087e32161296d7685f11d67e8e456916698e95d7fafed0f4ab8766ff7",
     "word_reefs.bin": "943386029b2280bf0001e7ec7613672f9e4a07cecb528cf6ccffef555b846dd3",
-    "reef_meta.bin": "c0eb9200de1d0375d5840775e4828e018a09804050fed7fcb605f317d356dd4e",
-    "island_meta.bin": "947349dada53cb779546684399888f09787834aa56e398cc4e40edf71d167c23",
+    "reef_meta.bin": "624643acb1d4040588de0d7b55427750dcb32eaa1cb179eaa5382c14e03717e2",
+    "island_meta.bin": "bfc82d09510e00227f70420c67c0ba4f28f959d6422a57c3a948199550bfbba3",
     "background.bin": "520510af610f92fba07d91f63af3457717698fb77dd16756c715c0e67764919a",
     "compounds.bin": "ff129029db113b2ae2a8511029d484d07f9a2bd644d385db504863625cdb919d",
     "constants.bin": "34d27719b158c3e64482a536dc5bd5be821f0717ee82f91b8c0c950847219691",

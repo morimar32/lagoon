@@ -17,6 +17,8 @@ from ._types import (
     WordInfo,
 )
 
+_BG_STD_FLOOR = 0.01  # Minimum credible bg_std; anything below is epsilon noise
+
 if TYPE_CHECKING:
     import ahocorasick
 
@@ -484,7 +486,7 @@ class ReefScorer:
 
         for i in range(n):
             std = bg_std[i]
-            if std > 0.0:
+            if std > _BG_STD_FLOOR:
                 z_scores[i] = (raw_scores[i] - bg_mean[i]) / std
             else:
                 z_scores[i] = 0.0
