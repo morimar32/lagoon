@@ -16,11 +16,11 @@ class WordInfo:
 @dataclass(slots=True)
 class ReefMeta:
     reef_id: int          # positional index
-    hierarchy_addr: int   # u16 bit-packed
+    hierarchy_addr: int   # u32 bit-packed: arch(8)|island(8)|reef(16)
     n_words: int
     name: str
-    island_id: int        # derived: (addr >> 8) & 0x3F
-    arch_id: int          # derived: (addr >> 14) & 0x03
+    island_id: int        # derived: (addr >> 16) & 0xFF
+    arch_id: int          # derived: (addr >> 24) & 0xFF
 
 
 @dataclass(slots=True)
@@ -51,7 +51,7 @@ class ScoredIsland:
 class TopicResult:
     top_reefs: list[ScoredReef]
     top_islands: list[ScoredIsland]
-    arch_scores: list[float]     # len=4
+    arch_scores: list[float]     # len=N_ARCHS
     confidence: float
     coverage: float
     matched_words: int

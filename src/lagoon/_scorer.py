@@ -28,7 +28,7 @@ class ReefScorer:
 
     __slots__ = (
         "_word_lookup", "_word_reefs", "_reef_meta", "_island_meta",
-        "_bg_mean", "_bg_std", "_tokenizer", "_n_reefs",
+        "_bg_mean", "_bg_std", "_tokenizer", "_n_reefs", "_n_archs",
         "_reef_total_dims", "_reef_n_words", "_avg_reef_words",
         "_reef_edges",
     )
@@ -54,6 +54,7 @@ class ReefScorer:
         self._bg_mean = bg_mean
         self._bg_std = bg_std
         self._n_reefs = len(reef_meta)
+        self._n_archs = constants["N_ARCHS"]
         self._reef_total_dims = constants["reef_total_dims"]
         self._reef_n_words = constants["reef_n_words"]
         self._avg_reef_words = constants["avg_reef_words"]
@@ -97,7 +98,7 @@ class ReefScorer:
         return None
 
     def score_raw(self, text: str) -> list[float]:
-        """Score text and return the full 207-element z-score vector.
+        """Score text and return the full z-score vector (one entry per reef).
 
         Used internally by document analysis.
         """
@@ -201,7 +202,7 @@ class ReefScorer:
         Raises:
             ValueError: If reef_id is out of range or strength is invalid.
         """
-        n_total = self._n_reefs  # 207
+        n_total = self._n_reefs
 
         if n_associated_reefs < 1:
             raise ValueError("n_associated_reefs must be >= 1")
@@ -394,7 +395,7 @@ class ReefScorer:
             tr = TopicResult(
                 top_reefs=[],
                 top_islands=[],
-                arch_scores=[0.0] * 4,
+                arch_scores=[0.0] * self._n_archs,
                 confidence=0.0,
                 coverage=0.0 if total == 0 else 0.0,
                 matched_words=0,
@@ -423,7 +424,7 @@ class ReefScorer:
             return TopicResult(
                 top_reefs=[],
                 top_islands=[],
-                arch_scores=[0.0] * 4,
+                arch_scores=[0.0] * self._n_archs,
                 confidence=0.0,
                 coverage=0.0 if total_words == 0 else 0.0,
                 matched_words=0,
@@ -501,7 +502,7 @@ class ReefScorer:
         min_reef_z: float | None = None,
     ) -> TopicResult:
         """Phase 5: Extract top-K reefs, islands, archipelago rollup."""
-        # Sort all 207 by z-score descending
+        # Sort all reefs by z-score descending
         indexed = sorted(
             range(self._n_reefs), key=lambda i: z_scores[i], reverse=True,
         )
@@ -558,7 +559,7 @@ class ReefScorer:
         )
 
         # Archipelago rollup
-        arch_scores = [0.0] * 4
+        arch_scores = [0.0] * self._n_archs
         for island in top_islands:
             aid = island_meta[island.island_id].arch_id
             arch_scores[aid] += island.aggregate_z

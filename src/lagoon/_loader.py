@@ -14,7 +14,7 @@ import msgpack
 from ._errors import LagoonChecksumError, LagoonError, LagoonVersionError
 from ._types import IslandMeta, ReefMeta, WordInfo
 
-_EXPECTED_VERSION = "1.1"
+_EXPECTED_VERSION = "2.0"
 
 _DATA_FILES = (
     "word_lookup.bin",
@@ -113,8 +113,8 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
             hierarchy_addr=addr,
             n_words=rm["n_words"],
             name=rm["name"],
-            island_id=(addr >> 8) & 0x3F,
-            arch_id=(addr >> 14) & 0x03,
+            island_id=(addr >> 16) & 0xFF,
+            arch_id=(addr >> 24) & 0xFF,
         ))
 
     # island_meta: list[IslandMeta]

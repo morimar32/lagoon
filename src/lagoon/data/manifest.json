@@ -1,37 +1,37 @@
 {
-  "version": "1.1",
+  "version": "2.0",
   "format": "msgpack",
   "v2_format": "flat_binary",
-  "build_timestamp": "2026-02-15T18:14:55Z",
+  "build_timestamp": "2026-02-17T03:46:46Z",
   "files": {
-    "word_lookup.bin": "697bdd018bd217071fc3bae9c3801be6f7728e789a62d0867cd3e67aa6429bc8",
-    "word_reefs.bin": "dcf6b07eaed813e614a8a2cff60a1779beffffd318776b5647dafd6a2bf0bb90",
-    "reef_meta.bin": "ba2a1037fae30920871f67b42c0c9491d38223bee4f1f635d7cfeec6c4bb080d",
-    "island_meta.bin": "f8c2ac4e7592f94df78951da96c7e7946618a3d4f9c9cc8e5dec0ed2899cf9df",
-    "background.bin": "bf7326be08cea90c774c2ee4d111dbd55f1692a258aa351ff96edfe22916e8d0",
+    "word_lookup.bin": "e4a68f2a6a4c9370a4decc53ace52b277ca513ec1a983afa2b0dff331ed23363",
+    "word_reefs.bin": "da407a7715b8297d226d803db297ac56c3bc29aee46940db6afb67e824699c38",
+    "reef_meta.bin": "20400113f2e059ee5e9fff68fa875a1357a1118241ca4d744f6a01185a48016c",
+    "island_meta.bin": "a924f628875636c449946fce233ce0394d634ce5fc0a1051b97da48b3cb0bb73",
+    "background.bin": "6c726403cbbcbca6530572e3b784e18e62feaa956e90a31e0bd0411b7bccdfa2",
     "compounds.bin": "af823a106bfa6911f0547c83c4664b581ce6381ee104745293f82ef927842fdc",
-    "constants.bin": "f99649fe65bd892198bfbed978a5b90fb8337cd764ab05ad0da679b638fa4a05",
-    "reef_edges.bin": "a743c470df24f82f4daac71066c7cf067f3d12b62cc3d067b31127ed17f2e55b"
+    "constants.bin": "7c61136f862a3f22aad104347066905756b3417819cf8134ed6f0acf7c22c2b5",
+    "reef_edges.bin": "7360a0c5956f685967fae82aecb7d7c8bbdfb2314c3143b3cf25929081c84761"
   },
   "v2_files": {
-    "word_lookup.bin": "2dfe661174c258ab75d413f89f2c9a34a64b46cd25149e5512e6f31bf5d97545",
-    "word_reefs.bin": "cae0485f12a4bfe8aa429f55ceb41e63ca202738f7fc5925c3a250036b24db41",
-    "reef_meta.bin": "2272ccd1507d3c290d59c9d218f52a8a3defa848459eebfe1a44598a4c0a29c0",
-    "island_meta.bin": "797752d5750b80b3416007f90efba053fb9e87e6e4267b7859d0bff75ae7a79b",
-    "background.bin": "826964553fb3b4de3b136f2b70ca67d071c3d0b48414332e3b7c94a73980f7a7",
+    "word_lookup.bin": "b4af669087e32161296d7685f11d67e8e456916698e95d7fafed0f4ab8766ff7",
+    "word_reefs.bin": "943386029b2280bf0001e7ec7613672f9e4a07cecb528cf6ccffef555b846dd3",
+    "reef_meta.bin": "c0eb9200de1d0375d5840775e4828e018a09804050fed7fcb605f317d356dd4e",
+    "island_meta.bin": "947349dada53cb779546684399888f09787834aa56e398cc4e40edf71d167c23",
+    "background.bin": "520510af610f92fba07d91f63af3457717698fb77dd16756c715c0e67764919a",
     "compounds.bin": "ff129029db113b2ae2a8511029d484d07f9a2bd644d385db504863625cdb919d",
-    "constants.bin": "30d9af2b78abd5fe11473273bdc541a4ce30623bf7a1b9680e5cbc1567b1781c",
-    "reef_edges.bin": "ea97c16d1319887a1dc276d85e9f1fed4dc07a0e547c35e52902dd5071f41066"
+    "constants.bin": "34d27719b158c3e64482a536dc5bd5be821f0717ee82f91b8c0c950847219691",
+    "reef_edges.bin": "7aa18e7f23e68c62ab7d99ce34e5182b2889544e153230d4f8e2eaf8188e3028"
   },
   "stats": {
-    "n_reefs": 207,
-    "n_islands": 52,
-    "n_archs": 4,
+    "n_reefs": 283,
+    "n_islands": 67,
+    "n_archs": 5,
     "n_words": 146698,
     "n_lookup_entries": 173286,
-    "n_words_with_reefs": 146695,
+    "n_words_with_reefs": 146697,
     "n_compounds": 63912,
-    "n_edges": 3925,
+    "n_edges": 7555,
     "edge_weight_threshold": 0.01
   }
 }

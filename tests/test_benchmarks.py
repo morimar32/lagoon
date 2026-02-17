@@ -143,7 +143,7 @@ def test_bench_phase3_bm25_accumulate(benchmark, scorer, n_words):
 
 
 def test_bench_phase4_bg_subtract(benchmark, scorer):
-    """Phase 4: z = (raw - bg_mean) / bg_std over 207 reefs. Claims ~200ns."""
+    """Phase 4: z = (raw - bg_mean) / bg_std over all reefs. Claims ~200ns."""
     word_ids, _ = scorer._tokenizer.process(SENTENCE_30W)
     scores_q, _ = scorer._accumulate_bm25(word_ids)
     raw = [sq / 8192.0 for sq in scores_q]
@@ -212,7 +212,7 @@ def test_bench_score_batch(benchmark, scorer):
 
 
 def test_bench_score_raw(benchmark, scorer):
-    """score_raw() returning full 207-element z-score vector."""
+    """score_raw() returning full z-score vector (one entry per reef)."""
     benchmark(scorer.score_raw, SENTENCE_30W)
 
 

@@ -29,10 +29,10 @@ def test_load_default():
 def test_load_explicit_path():
     """Loading with explicit path to bundled data should succeed."""
     data = load_data(_default_data_dir())
-    assert len(data["reef_meta"]) == 207
-    assert len(data["island_meta"]) == 52
-    assert len(data["bg_mean"]) == 207
-    assert len(data["bg_std"]) == 207
+    assert len(data["reef_meta"]) == 283
+    assert len(data["island_meta"]) == 67
+    assert len(data["bg_mean"]) == 283
+    assert len(data["bg_std"]) == 283
 
 
 def test_word_lookup_size():
@@ -67,10 +67,10 @@ def test_island_meta_fields():
 
 
 def test_reef_edges():
-    """reef_edges should have 3925 valid (src, tgt, weight) entries."""
+    """reef_edges should have 7555 valid (src, tgt, weight) entries."""
     data = load_data()
     edges = data["reef_edges"]
-    assert len(edges) == 3925
+    assert len(edges) == 7555
     n_reefs = len(data["reef_meta"])
     for src, tgt, weight in edges:
         assert isinstance(src, int)

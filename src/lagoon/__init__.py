@@ -1,4 +1,4 @@
-"""Lagoon: text-scoring library mapping input text to 207 semantic reefs."""
+"""Lagoon: text-scoring library mapping input text to semantic reefs."""
 
 from __future__ import annotations
 
