@@ -11,6 +11,7 @@ class WordInfo:
     word_id: int     # u32 index into word_reefs
     specificity: int # i8 sigma band (-2 to +2)
     idf_q: int       # u8 quantized IDF
+    tag: int = 0     # opaque consumer metadata, not interpreted by lagoon
 
 
 @dataclass(slots=True)

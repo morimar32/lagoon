@@ -214,3 +214,89 @@ def test_reef_scorer_importable():
     """ReefScorer should be importable from lagoon."""
     # Via __getattr__
     assert lagoon.ReefScorer is not None
+
+
+# -- Tag field tests --
+
+
+def test_wordinfo_default_tag():
+    """Default tag should be 0 on plain WordInfo construction."""
+    info = WordInfo(word_hash=123, word_id=0, specificity=1, idf_q=100)
+    assert info.tag == 0
+
+
+def test_tag_roundtrip_add_custom_word(scorer):
+    """Tag should round-trip through add_custom_word()."""
+    info = scorer.add_custom_word(
+        "tagword_rt",
+        reef_associations=[(42, 0.8)],
+        tag=7,
+    )
+    assert info.tag == 7
+
+
+def test_tag_accessible_via_lookup(scorer):
+    """Tag should be accessible via lookup_word() after add_custom_word()."""
+    scorer.add_custom_word(
+        "tagword_lu",
+        reef_associations=[(10, 0.6)],
+        tag=42,
+    )
+    found = scorer.lookup_word("tagword_lu")
+    assert found is not None
+    assert found.tag == 42
+
+
+def test_get_word_tags_returns_nonzero(scorer):
+    """get_word_tags() should return only non-zero tags."""
+    info_tagged = scorer.add_custom_word(
+        "tagword_nz1",
+        reef_associations=[(42, 0.8)],
+        tag=5,
+    )
+    info_untagged = scorer.add_custom_word(
+        "tagword_nz2",
+        reef_associations=[(17, 0.7)],
+        tag=0,
+    )
+    result = scorer.get_word_tags({info_tagged.word_id, info_untagged.word_id})
+    assert result == {info_tagged.word_id: 5}
+
+
+def test_get_word_tags_empty_for_base_only(scorer):
+    """get_word_tags() should return empty dict for base-vocabulary-only queries."""
+    # Look up a known base word
+    base_info = scorer.lookup_word("brain")
+    assert base_info is not None
+    result = scorer.get_word_tags({base_info.word_id})
+    assert result == {}
+
+
+def test_base_vocab_tag_is_zero(scorer):
+    """Base vocabulary words should have tag 0."""
+    info = scorer.lookup_word("cortex")
+    assert info is not None
+    assert info.tag == 0
+
+
+def test_tag_does_not_affect_scoring(scorer):
+    """Scoring results should be identical regardless of tag value."""
+    info_no_tag = scorer.add_custom_word(
+        "tagword_sc1",
+        reef_associations=[(42, 0.9), (17, 0.5)],
+        tag=0,
+    )
+    result_no_tag = scorer.score("tagword_sc1")
+
+    info_with_tag = scorer.add_custom_word(
+        "tagword_sc2",
+        reef_associations=[(42, 0.9), (17, 0.5)],
+        tag=99,
+    )
+    result_with_tag = scorer.score("tagword_sc2")
+
+    # Same associations → same scoring behavior
+    assert result_no_tag.matched_words == result_with_tag.matched_words
+    assert result_no_tag.coverage == result_with_tag.coverage
+    for r1, r2 in zip(result_no_tag.top_reefs, result_with_tag.top_reefs):
+        assert r1.z_score == pytest.approx(r2.z_score)

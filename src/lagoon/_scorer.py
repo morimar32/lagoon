@@ -32,7 +32,7 @@ class ReefScorer:
         "_word_lookup", "_word_reefs", "_reef_meta", "_island_meta",
         "_bg_mean", "_bg_std", "_tokenizer", "_n_reefs", "_n_archs",
         "_reef_total_dims", "_reef_n_words", "_avg_reef_words",
-        "_reef_edges",
+        "_reef_edges", "_word_tags",
     )
 
     def __init__(
@@ -61,6 +61,7 @@ class ReefScorer:
         self._reef_n_words = constants["reef_n_words"]
         self._avg_reef_words = constants["avg_reef_words"]
         self._reef_edges = reef_edges if reef_edges else []
+        self._word_tags: dict[int, int] = {}
 
         self._tokenizer = Tokenizer(
             word_lookup, compound_ac, compound_word_ids, compound_strings,
@@ -258,6 +259,7 @@ class ReefScorer:
         reef_associations: list[tuple[int, float]],
         *,
         specificity: int = 2,
+        tag: int = 0,
     ) -> WordInfo:
         """Add a custom word to the vocabulary.
 
@@ -328,7 +330,10 @@ class ReefScorer:
             word_id=word_id,
             specificity=specificity,
             idf_q=idf_q,
+            tag=tag,
         )
+        if tag != 0:
+            self._word_tags[word_id] = tag
 
         # Inject into scorer
         self._word_lookup[word_hash] = info
@@ -375,6 +380,16 @@ class ReefScorer:
         self._tokenizer._compound_ac = ac
         self._tokenizer._compound_word_ids = compound_word_ids
         self._tokenizer._compound_strings = compound_strings
+
+    def get_word_tags(self, word_ids: frozenset[int] | set[int]) -> dict[int, int]:
+        """Return non-zero tags for the given word_ids.
+
+        Only entries whose tag != 0 are included. Base vocabulary words
+        (tag 0) are omitted, so callers can distinguish custom-injected
+        words from base words by membership alone.
+        """
+        tags = self._word_tags
+        return {wid: tags[wid] for wid in word_ids if wid in tags}
 
     # -- Internal methods --
 

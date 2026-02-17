@@ -46,7 +46,7 @@ print(len(result.matched_word_ids))    # 6 (set of word_ids that matched)
 |-------|------|-------------------|
 | `top_reefs` | `list[ScoredReef]` | Top 10 reefs ranked by z-score |
 | `top_islands` | `list[ScoredIsland]` | Island-level rollup (mid-level clusters) |
-| `arch_scores` | `list[float]` | 4 archipelago-level scores |
+| `arch_scores` | `list[float]` | 5 archipelago-level scores |
 | `confidence` | `float` | Gap between #1 and #2 reef z-scores |
 | `coverage` | `float` | Fraction of input words found in the dictionary |
 | `matched_words` | `int` | Number of words that hit the dictionary |
@@ -57,7 +57,7 @@ Each `ScoredReef` has:
 
 ```python
 reef = result.top_reefs[0]
-reef.reef_id               # 0-206
+reef.reef_id               # 0-282
 reef.z_score               # background-subtracted score
 reef.raw_bm25              # raw BM25 before background subtraction
 reef.n_contributing_words   # how many input words activated this reef
@@ -210,16 +210,38 @@ info = scorer.add_custom_word(
     "kubernetes",
     reef_associations=[(42, 0.9), (17, 0.5)],
     specificity=2,  # default: highly specific
+    tag=1,          # optional: opaque consumer metadata (default 0)
 )
 
 print(info.word_id)       # next available word_id
 print(info.idf_q)         # quantized IDF (u8)
 print(info.specificity)   # 2
+print(info.tag)           # 1
 
 # Word is now immediately scorable
 result = scorer.score("kubernetes")
 print(result.matched_words)   # 1
 print(result.coverage)        # 1.0
+```
+
+### Tag custom words for downstream consumers
+
+The `tag` parameter is opaque metadata that lagoon stores but never interprets. Downstream consumers (e.g., Shoal) can use tags to distinguish base vocabulary words from custom-injected words:
+
+```python
+info1 = scorer.add_custom_word("kubernetes", reef_associations=[(42, 0.9)], tag=1)
+info2 = scorer.add_custom_word("terraform", reef_associations=[(17, 0.8)], tag=2)
+
+result = scorer.score("kubernetes and terraform")
+
+# get_word_tags() returns only non-zero tags
+tags = scorer.get_word_tags(result.matched_word_ids)
+print(tags)  # {<word_id>: 1, <word_id>: 2}
+
+# Base vocabulary words have tag 0 and are omitted from the result
+base_info = scorer.lookup_word("brain")
+print(base_info.tag)  # 0
+print(scorer.get_word_tags({base_info.word_id}))  # {}
 ```
 
 ### Compute BM25 scores without injecting
@@ -280,11 +302,11 @@ scorer.score("cortex").top_reefs[0].z_score == scorer.score("cortex cortex corte
 
 ## Hierarchy
 
-Lagoon's 207 reefs are organized into a three-level hierarchy:
+Lagoon's 283 reefs are organized into a three-level hierarchy:
 
-- **4 Archipelagos** — broadest level (natural sciences, physical world, abstract processes, social order)
-- **52 Islands** — mid-level communities (2-8 reefs each)
-- **207 Reefs** — finest-grained semantic clusters (the primary scoring target)
+- **5 Archipelagos** — broadest level (medical/physical sciences, physical world/human artifacts, abstract concepts/states, formal systems/qualities, activities/performance/relations)
+- **67 Islands** — mid-level communities (2-8 reefs each)
+- **283 Reefs** — finest-grained semantic clusters (the primary scoring target)
 
 Access island and archipelago rollups through the result:
 
@@ -295,6 +317,6 @@ result = scorer.score("neuron synapse axon dendrite cortex brain")
 for island in result.top_islands[:3]:
     print(f"{island.name}: z={island.aggregate_z:.2f} ({island.n_contributing_reefs} reefs)")
 
-# Archipelagos (indexed 0-3)
+# Archipelagos (indexed 0-4)
 print(result.arch_scores)
 ```

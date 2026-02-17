@@ -8,12 +8,13 @@ Lagoon is meant to be the "glue" that supports a number of downstream projects m
 
 ## 1. What is Lagoon
 
-Lagoon is a standalone text-scoring library that maps arbitrary input text to a hierarchy of 207 semantic reefs. It loads a set of pre-built binary data files at startup (~16 MB on disk) and scores text in ~100 microseconds per sentence (pure Python) using depth-weighted BM25 with background subtraction.
+Lagoon is a standalone text-scoring library that maps arbitrary input text to a hierarchy of 283 semantic reefs. It loads a set of pre-built binary data files at startup (~16 MB on disk) and scores text in ~100 microseconds per sentence (pure Python) using depth-weighted BM25 with background subtraction.
 
 **What lagoon does:**
 - Loads binary data files produced by the export tool from [Windowsill](https://github.com/morimar32/windowsill)
-- Scores text against 207 reefs using precomputed BM25 term scores
+- Scores text against 283 reefs using precomputed BM25 term scores
 - Returns ranked reefs, islands, and archipelagos with z-scores, confidence, and coverage
+- Supports runtime vocabulary extension with custom words, optional consumer tags, and compound injection
 - Provides compound-aware tokenization via Aho-Corasick automaton
 
 **What lagoon does NOT do:**
@@ -31,28 +32,29 @@ Lagoon is a standalone text-scoring library that maps arbitrary input text to a 
 
 The data files encode a three-generation hierarchy of semantic clusters, derived from embedding space decomposition:
 
-**Archipelagos (4 total)** — The broadest semantic regions:
-- Natural sciences and taxonomy
-- Physical world and materiality
-- Abstract processes and systems
-- Social order and assessment
+**Archipelagos (5 total)** — The broadest semantic regions:
+- Medical and physical sciences
+- Physical world and human artifacts
+- Abstract concepts and states
+- Formal systems and qualities
+- Activities, performance, and relations
 
-Too coarse for meaningful topic discrimination — most sentences spread across all four.
+Too coarse for meaningful topic discrimination — most sentences spread across all five.
 
-**Islands (52 total)** — Mid-level semantic communities. Each island contains 2-8 reefs. Useful for moderate-confidence topic summarization (e.g., "perception and attributes", "behavior and emotional states").
+**Islands (67 total)** — Mid-level semantic communities. Each island contains 2-8 reefs. Useful for moderate-confidence topic summarization (e.g., "perception and attributes", "behavior and emotional states").
 
-**Reefs (207 total)** — The finest-grained semantic clusters. Each reef groups 2-17 embedding dimensions that share statistically significant word overlap. Reef names describe coherent semantic neighborhoods: "archaic literary terms", "coastal landscapes and frontiers", "neural and structural". Reefs are the primary scoring target.
+**Reefs (283 total)** — The finest-grained semantic clusters. Each reef groups 2-17 embedding dimensions that share statistically significant word overlap. Reef names describe coherent semantic neighborhoods: "archaic literary terms", "coastal landscapes and frontiers", "neural and structural". Reefs are the primary scoring target.
 
-The hierarchy is encoded as a packed u16 address per reef: `arch(2)|island(6)|reef(8)`. Extract fields:
-- `reef_id = addr & 0xFF`
-- `island_id = (addr >> 8) & 0x3F`
-- `arch_id = (addr >> 14) & 0x03`
+The hierarchy is encoded as a packed u32 address per reef: `arch(8)|island(8)|reef(16)`. Extract fields:
+- `reef_id = addr & 0xFFFF`
+- `island_id = (addr >> 16) & 0xFF`
+- `arch_id = (addr >> 24) & 0xFF`
 
 ### 2.2 What a Reef Score Means
 
 A reef score quantifies how strongly the input text's vocabulary converges on a particular semantic neighborhood. Individual word lookups are noisy — most words spread across 10-20 reefs with only 10-15% concentration in their top reef. **The signal emerges from convergence across words, not from any single word.** When multiple words in the input independently activate the same reef, and that activation exceeds what random text would produce (background subtraction), the reef score is meaningful.
 
-High-specificity words (specificity = +2, only ~1,615 in the vocabulary) are an exception — they concentrate 30%+ in their top reef and touch only 1-4 reefs total. A single specificity=+2 word is a strong signal on its own.
+High-specificity words (specificity = +2) are an exception — they concentrate 30%+ in their top reef and touch only 1-4 reefs total. A single specificity=+2 word is a strong signal on its own.
 
 ### 2.3 Why BM25 Over Reefs
 
@@ -78,11 +80,12 @@ lagoon_data/
   manifest.json          # version, file checksums, build timestamp
   word_lookup.bin        # HashMap<u64, WordInfo>
   word_reefs.bin         # word_id -> list[ReefEntry]
-  reef_meta.bin          # [ReefMeta; 207]
-  island_meta.bin        # [IslandMeta; 52]
-  background.bin         # bg_mean [f32; 207] + bg_std [f32; 207]
+  reef_meta.bin          # [ReefMeta; 283]
+  island_meta.bin        # [IslandMeta; 67]
+  background.bin         # bg_mean [f32; 283] + bg_std [f32; 283]
   compounds.bin          # compound strings + word_id mapping
   constants.bin          # runtime constants + reef side arrays
+  reef_edges.bin         # inter-reef propagation edges
 ```
 
 The manifest includes a `version` field. Lagoon validates this on load and fails fast with a clear error on mismatch.
@@ -93,7 +96,7 @@ A `HashMap<u64, WordInfo>` of approximately 173K entries mapping FNV-1a u64 hash
 
 **Contents:**
 - ~147K base words from the vocabulary (each word's FNV-1a hash maps to its WordInfo). Morphy variants resolve to existing base word hashes, so they don't add new entries.
-- ~27K Snowball stemmer mappings for additional coverage (stems of base words and morphy variants that hash to values not already in the dictionary)
+- ~26K Snowball stemmer mappings for additional coverage (stems of base words and morphy variants that hash to values not already in the dictionary)
 
 **Key format:** FNV-1a u64 hash of the lowercase, whitespace-normalized string. Multi-word compounds use spaces as separators. Zero collisions confirmed across the full vocabulary.
 
@@ -128,7 +131,7 @@ An array indexed by word_id, where each entry is a list of `[reef_id, bm25_q]` p
 
 | Field | Type | Description |
 |-------|------|-------------|
-| reef_id | u8 | Which reef (0..206) |
+| reef_id | u16 | Which reef (0..282) |
 | bm25_q | u16 | Precomputed BM25 term score, quantized: `round(score * 8192)`, decode: `bm25_q / 8192.0` |
 
 Entries are sorted by reef_id within each word's list for cache-friendly iteration during BM25 accumulation.
@@ -137,7 +140,7 @@ BM25 term scores are **fully precomputed** at export time. At runtime, scoring i
 
 ### 3.4 reef_meta.bin
 
-An array of 207 ReefMeta records, indexed directly by reef_id.
+An array of 283 ReefMeta records, indexed directly by reef_id.
 
 **MessagePack structure:**
 ```
@@ -149,13 +152,13 @@ An array of 207 ReefMeta records, indexed directly by reef_id.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| hierarchy_addr | u16 | Bit-packed hierarchy: `arch(2)\|island(6)\|reef(8)` |
+| hierarchy_addr | u32 | Bit-packed hierarchy: `arch(8)\|island(8)\|reef(16)` |
 | n_words | u32 | Total words in this reef |
 | name | string | Human-readable name (e.g., "archaic literary terms") |
 
 ### 3.5 island_meta.bin
 
-An array of 52 IslandMeta records, indexed by island_id.
+An array of 67 IslandMeta records, indexed by island_id.
 
 **MessagePack structure:**
 ```
@@ -167,7 +170,7 @@ An array of 52 IslandMeta records, indexed by island_id.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| arch_id | u8 | Parent archipelago (0..3) |
+| arch_id | u8 | Parent archipelago (0..4) |
 | name | string | Human-readable name (e.g., "perception and attributes") |
 
 ### 3.6 background.bin
@@ -177,21 +180,21 @@ Two fixed-size arrays pre-computed by sampling 1000 random 15-word subsets from 
 **MessagePack structure:**
 ```
 {
-  "bg_mean": [f32; 207],
-  "bg_std": [f32; 207]
+  "bg_mean": [f32; 283],
+  "bg_std": [f32; 283]
 }
 ```
 
 | Array | Type | Description |
 |-------|------|-------------|
-| bg_mean | [f32; 207] | Mean BM25 score per reef across random samples |
-| bg_std | [f32; 207] | Standard deviation per reef across random samples |
+| bg_mean | [f32; 283] | Mean BM25 score per reef across random samples |
+| bg_std | [f32; 283] | Standard deviation per reef across random samples |
 
-**Size:** 207 x 2 x 4 bytes = 1,656 bytes.
+**Size:** 283 x 2 x 4 bytes = 2,264 bytes.
 
 At runtime: `z = (raw_bm25 - bg_mean[reef]) / bg_std[reef]` converts noisy BM25 scores into "how surprising is this reef activation given random input?"
 
-Reefs with high bg_mean (~1.74) are noise magnets that absorb vocabulary indiscriminately. Reefs with low bg_mean (~0.69) are highly discriminating — when they activate, it means something.
+Reefs with high bg_mean (~1.64) are noise magnets that absorb vocabulary indiscriminately. Reefs with low bg_mean are highly discriminating — when they activate, it means something.
 
 ### 3.7 compounds.bin
 
@@ -216,9 +219,9 @@ All runtime constants and reef-level side arrays.
 **MessagePack structure:**
 ```
 {
-  "N_REEFS": 207,
-  "N_ISLANDS": 52,
-  "N_ARCHS": 4,
+  "N_REEFS": 283,
+  "N_ISLANDS": 67,
+  "N_ARCHS": 5,
   "avg_reef_words": <float>,
   "k1": 1.2,
   "b": 0.75,
@@ -226,8 +229,8 @@ All runtime constants and reef-level side arrays.
   "BM25_SCALE": 8192,
   "FNV1A_OFFSET": 14695981039346656037,
   "FNV1A_PRIME": 1099511628211,
-  "reef_total_dims": [<u8>; 207],
-  "reef_n_words": [<u32>; 207]
+  "reef_total_dims": [<u8>; 283],
+  "reef_n_words": [<u32>; 283]
 }
 ```
 
@@ -239,22 +242,30 @@ The reef-level side arrays are stored here rather than duplicated per word-reef 
 
 ```json
 {
-  "version": "1.0",
+  "version": "2.0",
   "format": "msgpack",
-  "build_timestamp": "2026-02-13T06:09:55Z",
+  "v2_format": "flat_binary",
+  "build_timestamp": "2026-02-17T05:30:40Z",
   "files": {
     "word_lookup.bin": "<sha256>",
     "word_reefs.bin": "<sha256>",
+    "reef_edges.bin": "<sha256>",
+    ...
+  },
+  "v2_files": {
+    "word_lookup.bin": "<sha256>",
     ...
   },
   "stats": {
-    "n_reefs": 207,
-    "n_islands": 52,
-    "n_archs": 4,
+    "n_reefs": 283,
+    "n_islands": 67,
+    "n_archs": 5,
     "n_words": 146698,
     "n_lookup_entries": 173286,
-    "n_words_with_reefs": 146695,
-    "n_compounds": 63912
+    "n_words_with_reefs": 146697,
+    "n_compounds": 63912,
+    "n_edges": 7555,
+    "edge_weight_threshold": 0.01
   }
 }
 ```
@@ -263,7 +274,29 @@ The reef-level side arrays are stored here rather than duplicated per word-reef 
 
 Lagoon should validate the version on load and verify file checksums.
 
-### 3.10 Quantization Scheme
+### 3.10 reef_edges.bin
+
+A list of directed inter-reef propagation edges used for single-hop score spreading after BM25 accumulation.
+
+**MessagePack structure:**
+```
+[
+  [<src_reef_id>, <tgt_reef_id>, <weight>],
+  ...
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| src_reef_id | u16 | Source reef (0..282) |
+| tgt_reef_id | u16 | Target reef (0..282) |
+| weight | f32 | Propagation weight (edges below threshold 0.01 are pruned at export) |
+
+After BM25 accumulation, each edge propagates a fraction of the source reef's raw score to the target: `propagated[tgt] += raw[src] * weight`. This is a single-hop, additive pass — no iteration to convergence.
+
+**Current export:** 7,555 edges.
+
+### 3.11 Quantization Scheme
 
 All quantization is applied at export time only. The source database stores full DOUBLE precision values; the binary export files use fixed-point integer representations for compactness and cache efficiency.
 
@@ -292,18 +325,18 @@ At u8 BM25 precision (scale=255), 1.3% ranking errors were observed, confirming 
 class ReefScorer:
     word_lookup: dict[int, WordInfo]        # HashMap<u64, WordInfo>, ~173K entries
     word_reefs: list[list[ReefEntry]]       # indexed by word_id
-    reef_meta: list[ReefMeta]               # indexed by reef_id, len=207
-    island_meta: list[IslandMeta]           # indexed by island_id, len=52
-    bg_mean: list[float]                    # len=207
-    bg_std: list[float]                     # len=207
+    reef_meta: list[ReefMeta]               # indexed by reef_id, len=283
+    island_meta: list[IslandMeta]           # indexed by island_id, len=67
+    bg_mean: list[float]                    # len=283
+    bg_std: list[float]                     # len=283
     compound_ac: AhoCorasick                # built at load time from compounds.bin
     compound_word_ids: list[int]            # compound match index -> word_id
-    reef_total_dims: list[int]              # [u8; 207]
-    reef_n_words: list[int]                 # [u32; 207]
-    avg_reef_words: float                   # ~5,282
+    reef_total_dims: list[int]              # [u8; 283]
+    reef_n_words: list[int]                 # [u32; 283]
+    avg_reef_words: float                   # ~4,731
 ```
 
-**Rust equivalent:** `word_lookup` becomes `HashMap<u64, WordInfo>`, `word_reefs` becomes `Vec<Vec<ReefEntry>>`, and the f32 arrays become `[f32; 207]`. All fields are flat, owned types — no reference counting, no dynamic dispatch. BM25 parameters are baked into precomputed scores at export time and are not needed at runtime for scoring; `avg_reef_words` is retained only for reference.
+**Rust equivalent:** `word_lookup` becomes `HashMap<u64, WordInfo>`, `word_reefs` becomes `Vec<Vec<ReefEntry>>`, and the f32 arrays become `[f32; 283]`. All fields are flat, owned types — no reference counting, no dynamic dispatch. BM25 parameters are baked into precomputed scores at export time and are not needed at runtime for scoring; `avg_reef_words` is retained only for reference.
 
 ### WordInfo
 
@@ -314,27 +347,30 @@ class WordInfo:
     word_id: int          # u32 — index into word_reefs
     specificity: int      # i8 — sigma band: +2 to -2
     idf_q: int            # u8 — quantized IDF
+    tag: int = 0          # opaque consumer metadata, not interpreted by lagoon
 ```
 
-**Rust:** All fields are fixed-size integers. `#[repr(C)]` layout matches serialized format.
+The `tag` field is opaque consumer metadata — lagoon never inspects or acts on it. It defaults to 0 for all base vocabulary words and words loaded from data files. Non-zero tags can be assigned via `add_custom_word(tag=...)` to let downstream consumers (e.g., Shoal) distinguish custom-injected words from base vocabulary at query time.
+
+**Rust:** All fields are fixed-size integers. `#[repr(C)]` layout matches serialized format. `tag` is `u32` (or whatever width the consumer needs).
 
 ### ReefEntry
 
 ```python
 @dataclass
 class ReefEntry:
-    reef_id: int          # u8 — which reef (0..206)
+    reef_id: int          # u16 — which reef (0..282)
     bm25_q: int           # u16 — precomputed BM25 term score
 ```
 
-**Rust:** 3 bytes packed. `reef_id: u8, bm25_q: u16`.
+**Rust:** 4 bytes packed. `reef_id: u16, bm25_q: u16`.
 
 ### ReefMeta
 
 ```python
 @dataclass
 class ReefMeta:
-    hierarchy_addr: int   # u16 — bit-packed arch|island|reef
+    hierarchy_addr: int   # u32 — bit-packed arch(8)|island(8)|reef(16)
     n_words: int          # u32
     name: str             # UTF-8, pre-normalized
 ```
@@ -344,7 +380,7 @@ class ReefMeta:
 ```python
 @dataclass
 class IslandMeta:
-    arch_id: int          # u8 — parent archipelago (0..3)
+    arch_id: int          # u8 — parent archipelago (0..4)
     name: str             # UTF-8
 ```
 
@@ -355,7 +391,7 @@ class IslandMeta:
 class TopicResult:
     top_reefs: list[ScoredReef]           # Top-K reefs by z-score
     top_islands: list[ScoredIsland]       # Island-level rollup
-    arch_scores: list[float]              # len=4, archipelago distribution
+    arch_scores: list[float]              # len=5, archipelago distribution
     confidence: float                      # z-score gap: #1 - #2 reef
     coverage: float                        # matched_words / total_input_words
     matched_words: int                     # words that hit the dictionary
@@ -419,7 +455,10 @@ Phase 1: Compound scan (Aho-Corasick)
 Phase 2: Tokenize + normalize (lowercase, HashMap lookup, stem fallback)
     |
     v
-Phase 3: BM25 accumulation (precomputed scores -> [f32; 207])
+Phase 3: BM25 accumulation (precomputed scores -> [f32; 283])
+    |
+    v
+Phase 3.5: Edge propagation (single-hop score spreading via reef_edges)
     |
     v
 Phase 4: Background subtraction (z = (raw - bg_mean) / bg_std)
@@ -504,8 +543,8 @@ Initialize a score array and accumulate precomputed BM25 scores:
 
 ```python
 def accumulate_bm25(self, word_ids):
-    scores = [0.0] * 207
-    word_counts = [0] * 207  # contributing words per reef
+    scores = [0.0] * 283
+    word_counts = [0] * 283  # contributing words per reef
     for word_id in word_ids:
         for reef_id, bm25_q in self.word_reefs[word_id]:
             scores[reef_id] += bm25_q / 8192.0
@@ -523,15 +562,15 @@ Convert raw BM25 scores to z-scores:
 
 ```python
 def subtract_background(self, scores):
-    z_scores = [0.0] * 207
-    for reef in range(207):
+    z_scores = [0.0] * 283
+    for reef in range(283):
         z_scores[reef] = (scores[reef] - self.bg_mean[reef]) / self.bg_std[reef]
     return z_scores
 ```
 
 Guard: if `bg_std[reef]` is zero (should not happen — epsilon floor applied at export), set z to 0.0.
 
-**Performance (pure Python):** ~9μs total (two float ops per reef x 207, dominated by Python loop overhead). Rust target: ~200ns.
+**Performance (pure Python):** ~9μs total (two float ops per reef x 283, dominated by Python loop overhead). Rust target: ~200ns.
 
 ### 5.6 Phase 5: Result Extraction
 
@@ -559,7 +598,7 @@ def extract_results(self, z_scores, raw_scores, word_counts, matched, unknown):
     # Island rollup
     island_z = defaultdict(lambda: [0.0, 0])
     for reef in top_reefs:
-        island_id = (self.reef_meta[reef.reef_id].hierarchy_addr >> 8) & 0x3F
+        island_id = (self.reef_meta[reef.reef_id].hierarchy_addr >> 16) & 0xFF
         island_z[island_id][0] += reef.z_score
         island_z[island_id][1] += 1
     top_islands = sorted([
@@ -568,7 +607,7 @@ def extract_results(self, z_scores, raw_scores, word_counts, matched, unknown):
     ], key=lambda x: x.aggregate_z, reverse=True)
 
     # Archipelago rollup
-    arch_scores = [0.0] * 4
+    arch_scores = [0.0] * 5
     for island in top_islands:
         arch_id = self.island_meta[island.island_id].arch_id
         arch_scores[arch_id] += island.aggregate_z
@@ -607,7 +646,7 @@ IDF(word) = ln((N - n + 0.5) / (n + 0.5) + 1)
 ```
 
 Where:
-- N = 207 (total reefs)
+- N = 283 (total reefs)
 - n = number of reefs containing the word
 
 **IDF distribution across the vocabulary:**
@@ -665,7 +704,7 @@ A noisy reef with bg_mean=1.74 needs a much higher raw BM25 to achieve a high z-
 
 **Example — Huck Finn passage:** "archaic literary terms" achieves a very high z-score because its raw BM25 score far exceeds the reef's background mean. The signal is genuinely surprising.
 
-**Implementation cost: essentially zero.** 1.6 KB of pre-computed data. Two float ops per reef (~200ns for all 207).
+**Implementation cost: essentially zero.** ~2.3 KB of pre-computed data. Two float ops per reef (~200ns for all 283).
 
 ### Parameter Rationale: k1 and b
 
@@ -699,7 +738,7 @@ Score a single text string. Runs the full 5-phase pipeline. Returns a TopicResul
 
 ### score_batch(texts) -> list[TopicResult]
 
-Score multiple texts. Semantically equivalent to `[score(t) for t in texts]` but may optimize memory allocation (reuse the `[f32; 207]` scratch array across calls).
+Score multiple texts. Semantically equivalent to `[score(t) for t in texts]` but may optimize memory allocation (reuse the `[f32; 283]` scratch array across calls).
 
 ### analyze(text, *, sensitivity=1.0, smooth_window=2, min_chunk_sentences=2, max_chunk_sentences=30) -> DocumentAnalysis
 
@@ -746,9 +785,9 @@ Compute quantized IDF and BM25 scores for a custom word, given its reef associat
 
 **Returns:** `(idf_q, [(reef_id, bm25_q), ...])` — quantized IDF (u8, scale 51) and per-reef BM25 scores (u16, scale 8192).
 
-**Validation:** Raises `ValueError` for invalid reef_ids (>= 207), out-of-range strengths, or n_associated_reefs < 1.
+**Validation:** Raises `ValueError` for invalid reef_ids (>= 283), out-of-range strengths, or n_associated_reefs < 1.
 
-#### add_custom_word(word, reef_associations, *, specificity=2) -> WordInfo
+#### add_custom_word(word, reef_associations, *, specificity=2, tag=0) -> WordInfo
 
 Full injection pipeline for a custom word:
 1. Normalize to lowercase
@@ -757,15 +796,26 @@ Full injection pipeline for a custom word:
 4. Compute BM25 scores via `compute_custom_word_scores()`
 5. Allocate next word_id
 6. Inject into scorer's lookup structures
+7. If `tag != 0`, record in internal tag index for `get_word_tags()` lookup
 
 **Parameters:**
 - `word`: The word string (will be lowercased)
 - `reef_associations`: List of `(reef_id, strength)` tuples where strength is 0.0-1.0
 - `specificity`: Sigma band (-2 to +2), default 2 (highly specific)
+- `tag`: Opaque consumer metadata (default 0). Stored on the `WordInfo` and indexed for O(1) lookup via `get_word_tags()`. Lagoon never inspects this value.
 
-**Returns:** `WordInfo` with the assigned word_hash, word_id, specificity, and idf_q.
+**Returns:** `WordInfo` with the assigned word_hash, word_id, specificity, idf_q, and tag.
 
 **Errors:** Raises `ValueError` for empty word, duplicate word, invalid specificity, empty associations, invalid reef_id, or invalid strength.
+
+#### get_word_tags(word_ids) -> dict[int, int]
+
+Return non-zero tags for the given word_ids. Only entries whose `tag != 0` are included — base vocabulary words (tag 0) are omitted. This lets callers distinguish custom-injected words from base words by membership alone.
+
+**Parameters:**
+- `word_ids`: A `frozenset[int]` or `set[int]` of word_ids to query (typically `result.matched_word_ids`)
+
+**Returns:** `{word_id: tag}` dict containing only non-zero-tagged entries. Empty dict if no tagged words are in the input set.
 
 #### rebuild_compounds(additional_compounds)
 
@@ -796,7 +846,7 @@ Split raw text into sentences using a regex-based sentence boundary detector. Us
 |-------|------|-------------|
 | top_reefs | list[ScoredReef] | Top-K reefs ranked by z-score (K=10 default) |
 | top_islands | list[ScoredIsland] | Islands with contributing reefs, ranked by aggregate z |
-| arch_scores | [f32; 4] | Archipelago-level score distribution |
+| arch_scores | [f32; 5] | Archipelago-level score distribution |
 | confidence | f32 | z-score gap between #1 and #2 reef |
 | coverage | f32 | Fraction of input words that matched the dictionary |
 | matched_words | int | Count of matched words |
@@ -807,7 +857,7 @@ Split raw text into sentences using a regex-based sentence boundary detector. Us
 
 | Field | Type | Description |
 |-------|------|-------------|
-| reef_id | u8 | Reef index (0..206) |
+| reef_id | u16 | Reef index (0..282) |
 | z_score | f32 | Background-subtracted score |
 | raw_bm25 | f32 | Pre-subtraction BM25 score |
 | n_contributing_words | u16 | Words that contributed to this reef |
@@ -816,7 +866,7 @@ Split raw text into sentences using a regex-based sentence boundary detector. Us
 
 | Field | Type | Description |
 |-------|------|-------------|
-| island_id | u8 | Island index (0..51) |
+| island_id | u8 | Island index (0..66) |
 | aggregate_z | f32 | Sum of child reef z-scores |
 | n_contributing_reefs | u16 | Reefs contributing to this island |
 
@@ -837,10 +887,10 @@ Split raw text into sentences using a regex-based sentence boundary detector. Us
 |-----------|------|-------|
 | word_lookup | ~4.3 MB | u64 keys, ~173K entries (on disk; in-memory HashMap ~2.8 MB) |
 | word_reefs | ~11 MB | ~13 entries/word x ~147K words (on disk; in-memory with decoded entries) |
-| reef_meta | ~13 KB | 207 records |
-| island_meta | ~2.3 KB | 52 records |
-| reef side arrays | ~1.2 KB | reef_total_dims [u8; 207] + reef_n_words [u32; 207] |
-| bg_mean + bg_std | 3.7 KB | 207 x 2 x f32 (MessagePack overhead) |
+| reef_meta | ~18 KB | 283 records |
+| island_meta | ~3 KB | 67 records |
+| reef side arrays | ~1.7 KB | reef_total_dims [u8; 283] + reef_n_words [u32; 283] |
+| bg_mean + bg_std | 5 KB | 283 x 2 x f32 (MessagePack overhead) |
 | compound automaton | ~1.3 MB | Aho-Corasick over ~64K strings |
 | **Total on disk** | **~16 MB** | |
 
@@ -862,13 +912,13 @@ All timings measured with `pytest-benchmark` on CPython 3.11. A Rust port is exp
 
 ### Cache Behavior
 
-The `[f32; 207]` reef score array is 828 bytes — fits in L1 cache. No memory pressure during scoring. The word_reefs entries (~13 per word x 4 bytes = ~52 bytes) also fit in cache lines during iteration.
+The `[f32; 283]` reef score array is 1,132 bytes — fits in L1 cache. No memory pressure during scoring. The word_reefs entries (~13 per word x 4 bytes = ~52 bytes) also fit in cache lines during iteration.
 
 ### Bottleneck Analysis (Pure Python)
 
 - **Python loop overhead:** The dominant cost in pure Python. Individual operations (hash lookup ~50ns, stemmer ~120ns) are fast, but Python's per-iteration overhead (~1μs/word for tokenization, ~650ns/word for BM25) adds up.
-- **Result extraction:** ~25μs due to dataclass construction and Python sort over 207 elements — disproportionately expensive for short inputs.
-- **Background subtraction:** ~9μs for 207-element loop — trivial in Rust (~200ns) but meaningful in Python.
+- **Result extraction:** ~25μs due to dataclass construction and Python sort over 283 elements — disproportionately expensive for short inputs.
+- **Background subtraction:** ~9μs for 283-element loop — trivial in Rust (~200ns) but meaningful in Python.
 - **Aho-Corasick scan:** O(n) in text length, implemented in C (pyahocorasick), fast even in Python (~1-3μs for sentences).
 - **Snowball stemmer fallback:** ~120ns per word (C extension), fires ~30% of the time. Pre-expansion of morphy variants and snowball stems at export time reduces this to uncommon cases.
 - **HashMap lookups:** ~50ns per lookup. Dominant cost for long inputs in Rust. In Python, the loop overhead around lookups is the real bottleneck.
@@ -880,10 +930,10 @@ The `[f32; 207]` reef score array is 828 bytes — fits in L1 cache. No memory p
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| N_REEFS | 207 | Total number of reefs |
-| N_ISLANDS | 52 | Total number of islands |
-| N_ARCHS | 4 | Total number of archipelagos |
-| avg_reef_words | ~5,282 | Average word count across reefs |
+| N_REEFS | 283 | Total number of reefs |
+| N_ISLANDS | 67 | Total number of islands |
+| N_ARCHS | 5 | Total number of archipelagos |
+| avg_reef_words | ~4,731 | Average word count across reefs |
 | k1 | 1.2 | BM25 term frequency saturation |
 | b | 0.75 | BM25 length normalization strength |
 | IDF_SCALE | 51 | u8 quantization factor for IDF |
@@ -1012,7 +1062,7 @@ Split the Huck Finn passage at the midpoint:
 
 6. **Static base vocabulary.** The base dictionary is frozen at build time. New base words require a rebuild of the data files. However, the vocabulary extension API allows injecting custom words at runtime with learned reef associations — useful for domain-specific corpora where the base vocabulary has gaps.
 
-7. **207-reef ceiling.** Topic detection granularity is bounded by the 207 reefs. Sub-reef distinctions (e.g., "organic chemistry" vs "inorganic chemistry" within a chemistry reef) are not possible.
+7. **283-reef ceiling.** Topic detection granularity is bounded by the 283 reefs. Sub-reef distinctions (e.g., "organic chemistry" vs "inorganic chemistry" within a chemistry reef) are not possible.
 
 ---
 
@@ -1022,7 +1072,7 @@ Lagoon is designed to port from Python to Rust without architectural changes:
 
 - **No pickle.** All serialized data uses MessagePack — language-agnostic, supported in both Python and Rust (`rmp-serde`).
 
-- **Flat-array / mmap-friendly.** The `[f32; 207]` score arrays, ReefEntry lists, and metadata arrays are contiguous and fixed-stride. In Rust, the fixed-size arrays can potentially be mmapped directly with zero deserialization.
+- **Flat-array / mmap-friendly.** The `[f32; 283]` score arrays, ReefEntry lists, and metadata arrays are contiguous and fixed-stride. In Rust, the fixed-size arrays can potentially be mmapped directly with zero deserialization.
 
 - **UTF-8 strings, pre-normalized.** All strings in the data files are lowercase, whitespace-normalized UTF-8. No runtime Unicode normalization needed beyond lowercasing the input.
 
