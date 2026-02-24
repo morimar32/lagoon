@@ -145,7 +145,7 @@ def test_bench_phase3_bm25_accumulate(benchmark, scorer, n_words):
 def test_bench_phase4_bg_subtract(benchmark, scorer):
     """Phase 4: z = (raw - bg_mean) / bg_std over all reefs. Claims ~200ns."""
     word_ids, _ = scorer._tokenizer.process(SENTENCE_30W)
-    scores_q, _ = scorer._accumulate_bm25(word_ids)
+    scores_q, _, _, _ = scorer._accumulate_bm25(word_ids)
     raw = [sq / 8192.0 for sq in scores_q]
     benchmark.extra_info["readme_claim"] = "~200ns total"
     benchmark(scorer._subtract_background, raw)
@@ -157,11 +157,11 @@ def test_bench_phase4_bg_subtract(benchmark, scorer):
 def test_bench_phase5_extract(benchmark, scorer):
     """Phase 5: top-K sort, island/arch rollup, coverage. Claims ~500ns."""
     word_ids, unknown = scorer._tokenizer.process(SENTENCE_30W)
-    scores_q, word_counts = scorer._accumulate_bm25(word_ids)
+    scores_q, word_counts, csim_sum, swz_sum = scorer._accumulate_bm25(word_ids)
     raw = [sq / 8192.0 for sq in scores_q]
     z = scorer._subtract_background(raw)
     benchmark.extra_info["readme_claim"] = "~500ns"
-    benchmark(scorer._extract_results, z, raw, word_counts, word_ids, unknown, 10)
+    benchmark(scorer._extract_results, z, raw, word_counts, csim_sum, swz_sum, word_ids, unknown, 10)
 
 
 # ---------------------------------------------------------------------------

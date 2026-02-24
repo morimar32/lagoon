@@ -24,20 +24,24 @@ def test_load_default():
     assert "compound_ac" in data
     assert "constants" in data
     assert "reef_edges" in data
+    assert "word_reef_detail" in data
+    assert "sub_reef_meta" in data
 
 
 def test_load_explicit_path():
     """Loading with explicit path to bundled data should succeed."""
     data = load_data(_default_data_dir())
-    assert len(data["reef_meta"]) == 283
-    assert len(data["island_meta"]) == 67
-    assert len(data["bg_mean"]) == 283
-    assert len(data["bg_std"]) == 283
+    n_reefs = len(data["reef_meta"])
+    # After coral island promotion, gen-1 count should exceed the original 68
+    assert n_reefs > 68, f"Expected more than 68 reefs after coral promotion, got {n_reefs}"
+    assert len(data["island_meta"]) == n_reefs
+    assert len(data["bg_mean"]) == n_reefs
+    assert len(data["bg_std"]) == n_reefs
 
 
 def test_word_lookup_size():
     data = load_data()
-    assert len(data["word_lookup"]) > 170000
+    assert len(data["word_lookup"]) > 160000
 
 
 def test_word_reefs_size():
@@ -67,18 +71,51 @@ def test_island_meta_fields():
 
 
 def test_reef_edges():
-    """reef_edges should have 7555 valid (src, tgt, weight) entries."""
+    """reef_edges should be empty (island-level export skips edge propagation)."""
     data = load_data()
     edges = data["reef_edges"]
-    assert len(edges) == 7555
-    n_reefs = len(data["reef_meta"])
-    for src, tgt, weight in edges:
-        assert isinstance(src, int)
-        assert isinstance(tgt, int)
-        assert isinstance(weight, float)
-        assert 0 <= src < n_reefs
-        assert 0 <= tgt < n_reefs
-        assert weight > 0.0
+    assert len(edges) == 0
+
+
+def test_word_reefs_3_element():
+    """word_reefs entries should be 3-element tuples (reef_id, weight_q, sub_reef_id)."""
+    data = load_data()
+    # Find a word with at least one reef entry
+    for entries in data["word_reefs"]:
+        if entries:
+            assert len(entries[0]) == 3, (
+                f"Expected 3-element tuples, got {len(entries[0])}-element: {entries[0]}"
+            )
+            break
+
+
+def test_sub_reef_meta_loaded():
+    """sub_reef_meta should be loaded and non-empty."""
+    data = load_data()
+    assert len(data["sub_reef_meta"]) > 0
+    sm = data["sub_reef_meta"][0]
+    assert hasattr(sm, "sub_reef_id")
+    assert hasattr(sm, "parent_island_id")
+    assert hasattr(sm, "n_words")
+    assert hasattr(sm, "name")
+    assert sm.sub_reef_id == 0
+
+
+def test_word_reef_detail_loaded():
+    """word_reef_detail should be loaded with correct structure."""
+    data = load_data()
+    assert len(data["word_reef_detail"]) == len(data["word_reefs"])
+    # At least some entries should have detail (multi-reef words)
+    non_empty = sum(1 for entries in data["word_reef_detail"] if entries)
+    assert non_empty > 0, "No multi-reef words found in word_reef_detail"
+    # Check structure of a non-empty entry
+    for entries in data["word_reef_detail"]:
+        if entries:
+            assert len(entries[0]) == 3, (
+                f"Expected 3-element tuples (island_id, sub_reef_id, weight_q), "
+                f"got {len(entries[0])}-element"
+            )
+            break
 
 
 def test_missing_directory():

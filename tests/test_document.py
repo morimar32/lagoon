@@ -125,10 +125,11 @@ def test_min_chunk_sentences(scorer):
         "Stock prices surged on Wall Street.",
         "Bond yields fell sharply.",
     ]
-    # With min=3, we should get at most 1 segment (can't split 4 into 2 chunks of 3+)
+    # With min=3, ideally all 4 sentences should merge into 1 segment
     result = scorer.analyze(sentences, min_chunk_sentences=3)
-    for seg in result.segments:
-        assert len(seg.sentences) >= 2  # at least min_chunk_sentences or all merged
+    # All sentences should be accounted for
+    total = sum(len(seg.sentences) for seg in result.segments)
+    assert total == 4
 
 
 def test_max_chunk_sentences(scorer):

@@ -12,9 +12,9 @@ import ahocorasick
 import msgpack
 
 from ._errors import LagoonChecksumError, LagoonError, LagoonVersionError
-from ._types import IslandMeta, ReefMeta, WordInfo
+from ._types import IslandMeta, ReefMeta, SubReefMeta, WordInfo
 
-_EXPECTED_VERSION = "2.0"
+_EXPECTED_VERSION = "6.0"
 
 _DATA_FILES = (
     "word_lookup.bin",
@@ -25,6 +25,8 @@ _DATA_FILES = (
     "compounds.bin",
     "constants.bin",
     "reef_edges.bin",
+    "word_reef_detail.bin",
+    "sub_reef_meta.bin",
 )
 
 
@@ -96,14 +98,15 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
             specificity=val[2], idf_q=val[3],
         )
 
-    # word_reefs: list[list[tuple[int,int]]]
+    # word_reefs: list[list[tuple[int,int,int]]]  (reef_id, weight_q, sub_reef_id)
     raw_reefs = _load_msgpack(data_dir / "word_reefs.bin")
-    word_reefs: list[list[tuple[int, int]]] = [
+    word_reefs: list[list[tuple[int, int, int]]] = [
         [tuple(entry) for entry in word_entries]  # type: ignore[misc]
         for word_entries in raw_reefs
     ]
 
     # reef_meta: list[ReefMeta]
+    # v6 hierarchy_addr: arch(16)|island(16), island_id = reef_id (1:1)
     raw_reef_meta = _load_msgpack(data_dir / "reef_meta.bin")
     reef_meta: list[ReefMeta] = []
     for i, rm in enumerate(raw_reef_meta):
@@ -113,8 +116,14 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
             hierarchy_addr=addr,
             n_words=rm["n_words"],
             name=rm["name"],
-            island_id=(addr >> 16) & 0xFF,
-            arch_id=(addr >> 24) & 0xFF,
+            island_id=addr & 0xFFFF,
+            arch_id=(addr >> 16) & 0xFFFF,
+            valence=rm.get("valence", 0.0),
+            avg_specificity=rm.get("avg_specificity", 0.0),
+            noun_frac=rm.get("noun_frac", 0.0),
+            verb_frac=rm.get("verb_frac", 0.0),
+            adj_frac=rm.get("adj_frac", 0.0),
+            adv_frac=rm.get("adv_frac", 0.0),
         ))
 
     # island_meta: list[IslandMeta]
@@ -143,10 +152,32 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
     # constants
     constants = _load_msgpack(data_dir / "constants.bin")
 
+    # domainless word_ids (words recognized but not domain-specific)
+    domainless_word_ids = frozenset(constants.get("domainless_word_ids", []))
+
     # reef_edges: list of [src, tgt, weight] triplets
     raw_edges = _load_msgpack(data_dir / "reef_edges.bin")
     reef_edges: list[tuple[int, int, float]] = [
         (e[0], e[1], e[2]) for e in raw_edges
+    ]
+
+    # word_reef_detail: list[list[tuple[int,int,int]]] (island_id, sub_reef_id, weight_q)
+    raw_detail = _load_msgpack(data_dir / "word_reef_detail.bin")
+    word_reef_detail: list[list[tuple[int, int, int]]] = [
+        [tuple(e) for e in entries]  # type: ignore[misc]
+        for entries in raw_detail
+    ]
+
+    # sub_reef_meta: list[SubReefMeta]
+    raw_sub = _load_msgpack(data_dir / "sub_reef_meta.bin")
+    sub_reef_meta: list[SubReefMeta] = [
+        SubReefMeta(
+            sub_reef_id=i,
+            parent_island_id=sm["parent_island_id"],
+            n_words=sm["n_words"],
+            name=sm["name"],
+        )
+        for i, sm in enumerate(raw_sub)
     ]
 
     return {
@@ -161,4 +192,7 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
         "compound_strings": compound_strings,
         "constants": constants,
         "reef_edges": reef_edges,
+        "word_reef_detail": word_reef_detail,
+        "sub_reef_meta": sub_reef_meta,
+        "domainless_word_ids": domainless_word_ids,
     }

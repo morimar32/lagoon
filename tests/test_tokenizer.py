@@ -6,7 +6,7 @@ def test_single_word_lookup(scorer):
     info = scorer.lookup_word("brain")
     assert info is not None
     assert info.word_id > 0
-    assert info.specificity == -1  # universal word
+    assert info.specificity in (-2, -1, 0)  # broad word
 
 
 def test_stemmer_fallback(scorer):

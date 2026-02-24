@@ -17,11 +17,17 @@ class WordInfo:
 @dataclass(slots=True)
 class ReefMeta:
     reef_id: int          # positional index
-    hierarchy_addr: int   # u32 bit-packed: arch(8)|island(8)|reef(16)
+    hierarchy_addr: int   # u32 bit-packed: arch(16)|island(16)
     n_words: int
     name: str
     island_id: int        # derived: (addr >> 16) & 0xFF
     arch_id: int          # derived: (addr >> 24) & 0xFF
+    valence: float = 0.0
+    avg_specificity: float = 0.0
+    noun_frac: float = 0.0
+    verb_frac: float = 0.0
+    adj_frac: float = 0.0
+    adv_frac: float = 0.0
 
 
 @dataclass(slots=True)
@@ -31,13 +37,26 @@ class IslandMeta:
     name: str
 
 
+@dataclass(slots=True)
+class SubReefMeta:
+    sub_reef_id: int
+    parent_island_id: int
+    n_words: int
+    name: str
+
+
 @dataclass(slots=True, frozen=True)
 class ScoredReef:
     reef_id: int
     z_score: float
-    raw_bm25: float
+    raw_score: float
     n_contributing_words: int
     name: str
+    quality_score: float = 0.0
+    valence: float = 0.0
+    avg_specificity: float = 0.0
+    resolved_sub_reef_id: int | None = None
+    resolved_sub_reef_name: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -58,6 +77,8 @@ class TopicResult:
     matched_words: int
     unknown_words: list[str]
     matched_word_ids: frozenset[int] = field(default_factory=frozenset)
+    n_domainless: int = 0
+    valence_signal: float = 0.0
 
 
 @dataclass(slots=True, frozen=True)

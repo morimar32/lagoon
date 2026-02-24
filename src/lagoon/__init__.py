@@ -13,6 +13,7 @@ from ._types import (
     ReefMeta,
     ScoredIsland,
     ScoredReef,
+    SubReefMeta,
     TopicResult,
     TopicSegment,
     WordInfo,
@@ -36,6 +37,7 @@ __all__ = [
     "ScoredIsland",
     "ScoredReef",
     "STOP_WORDS",
+    "SubReefMeta",
     "TopicResult",
     "TopicSegment",
     "WordInfo",
@@ -65,6 +67,9 @@ def load(data_dir: Path | str | None = None) -> "ReefScorer":
         compound_strings=data["compound_strings"],
         constants=data["constants"],
         reef_edges=data["reef_edges"],
+        word_reef_detail=data["word_reef_detail"],
+        sub_reef_meta=data["sub_reef_meta"],
+        domainless_word_ids=data["domainless_word_ids"],
     )
 
 

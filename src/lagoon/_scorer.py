@@ -13,11 +13,14 @@ from ._types import (
     DocumentAnalysis,
     ScoredIsland,
     ScoredReef,
+    SubReefMeta,
     TopicResult,
     WordInfo,
 )
 
 _BG_STD_FLOOR = 0.01  # Minimum credible bg_std; anything below is epsilon noise
+_BG_ALPHA_THRESHOLD = 6  # matched words at which full bg subtraction kicks in
+_SUB_REEF_SENTINEL = 0xFFFF
 
 if TYPE_CHECKING:
     import ahocorasick
@@ -32,13 +35,14 @@ class ReefScorer:
         "_word_lookup", "_word_reefs", "_reef_meta", "_island_meta",
         "_bg_mean", "_bg_std", "_tokenizer", "_n_reefs", "_n_archs",
         "_reef_total_dims", "_reef_n_words", "_avg_reef_words",
-        "_reef_edges", "_word_tags",
+        "_reef_edges", "_word_tags", "_weight_scale", "_reef_weight_p75",
+        "_word_reef_detail", "_sub_reef_meta", "_domainless_word_ids",
     )
 
     def __init__(
         self,
         word_lookup: dict[int, WordInfo],
-        word_reefs: list[list[tuple[int, int]]],
+        word_reefs: list[list[tuple[int, int, int]]],
         reef_meta: list[ReefMeta],
         island_meta: list[IslandMeta],
         bg_mean: list[float],
@@ -48,6 +52,9 @@ class ReefScorer:
         compound_strings: list[str],
         constants: dict,
         reef_edges: list[tuple[int, int, float]] | None = None,
+        word_reef_detail: list[list[tuple[int, int, int]]] | None = None,
+        sub_reef_meta: list[SubReefMeta] | None = None,
+        domainless_word_ids: frozenset[int] | None = None,
     ) -> None:
         self._word_lookup = word_lookup
         self._word_reefs = word_reefs
@@ -60,12 +67,34 @@ class ReefScorer:
         self._reef_total_dims = constants["reef_total_dims"]
         self._reef_n_words = constants["reef_n_words"]
         self._avg_reef_words = constants["avg_reef_words"]
+        self._weight_scale = float(constants.get("WEIGHT_SCALE", 100.0))
         self._reef_edges = reef_edges if reef_edges else []
+        self._word_reef_detail = word_reef_detail if word_reef_detail else []
+        self._sub_reef_meta = sub_reef_meta if sub_reef_meta else []
+        self._domainless_word_ids = domainless_word_ids or frozenset()
         self._word_tags: dict[int, int] = {}
+        self._reef_weight_p75 = self._compute_reef_weight_percentiles(word_reefs)
 
         self._tokenizer = Tokenizer(
             word_lookup, compound_ac, compound_word_ids, compound_strings,
         )
+
+    # -- Public properties --
+
+    @property
+    def reef_word_counts(self) -> list[int]:
+        """Number of words per reef (read-only)."""
+        return self._reef_n_words
+
+    @property
+    def avg_reef_words(self) -> float:
+        """Average words per reef (read-only)."""
+        return self._avg_reef_words
+
+    @property
+    def n_reefs(self) -> int:
+        """Total number of reefs (read-only)."""
+        return self._n_reefs
 
     # -- Public scoring API --
 
@@ -108,8 +137,9 @@ class ReefScorer:
         word_ids, _ = self._tokenizer.process(text)
         if not word_ids:
             return [0.0] * self._n_reefs
-        scores_q, _ = self._accumulate_bm25(word_ids)
-        raw = [sq / 8192.0 for sq in scores_q]
+        scores_q, _ = self._accumulate_weights(word_ids)
+        ws = self._weight_scale
+        raw = [sq / ws for sq in scores_q]
         raw = self._propagate(raw)
         return self._subtract_background(raw)
 
@@ -181,32 +211,68 @@ class ReefScorer:
 
         return result
 
-    def compute_custom_word_scores(
-        self,
-        n_associated_reefs: int,
-        associations: list[tuple[int, float]],
-    ) -> tuple[int, list[tuple[int, int]]]:
-        """Compute IDF and BM25 scores for a custom word from reef associations.
+    def _compute_reef_weight_percentiles(
+        self, word_reefs: list[list[tuple[int, int, int]]],
+    ) -> list[int]:
+        """Compute 75th-percentile weight_q for each reef from base vocabulary.
 
-        Uses lagoon's BM25 formula (k1=1.2, b=0.75) with the association
-        strength as a synthetic tf proxy. Produces quantized scores compatible
-        with the base vocabulary (u8 IDF scale 51, u16 BM25 scale 8192).
+        Single pass over all word_reefs entries, collecting weight_q per reef.
+        Reefs with zero words get a fallback equal to the global median of
+        all per-reef p75 values.
 
-        Args:
-            n_associated_reefs: Number of reefs the word is associated with.
-                Used for IDF computation.
-            associations: List of (reef_id, strength) pairs where strength
-                is 0.0-1.0 normalized association strength.
+        Returns a list indexed by reef_id.
+        """
+        n = self._n_reefs
+        reef_weights: list[list[int]] = [[] for _ in range(n)]
+        for entries in word_reefs:
+            for reef_id, weight_q, _sub in entries:
+                if reef_id < n:
+                    reef_weights[reef_id].append(weight_q)
 
-        Returns:
-            (idf_q, reef_scores) where idf_q is u8-quantized IDF and
-            reef_scores is a list of (reef_id, bm25_q) pairs.
+        p75s: list[int] = []
+        populated: list[int] = []
+        for rid in range(n):
+            ws = reef_weights[rid]
+            if ws:
+                ws.sort()
+                idx = min(len(ws) - 1, (3 * len(ws)) // 4)
+                p = ws[idx]
+                p75s.append(p)
+                populated.append(p)
+            else:
+                p75s.append(0)  # placeholder, will be replaced by fallback
 
-        Raises:
-            ValueError: If reef_id is out of range or strength is invalid.
+        # Fallback for empty reefs: median of populated p75s
+        if populated:
+            populated.sort()
+            fallback = populated[len(populated) // 2]
+        else:
+            fallback = 500  # safe default when no data at all
+
+        for rid in range(n):
+            if not reef_weights[rid]:
+                p75s[rid] = fallback
+
+        return p75s
+
+    def calc_custom_weight(self, reef_id: int, strength: float) -> int:
+        """Compute a per-reef calibrated weight_q for a custom word.
+
+        Returns round(p75[reef_id] * strength), clamped to u16.
+        """
+        if reef_id < 0 or reef_id >= self._n_reefs:
+            raise ValueError(
+                f"reef_id {reef_id} out of range [0, {self._n_reefs - 1}]"
+            )
+        raw = round(self._reef_weight_p75[reef_id] * strength)
+        return max(0, min(65535, raw))
+
+    def calc_custom_idf(self, n_associated_reefs: int) -> int:
+        """Compute quantized IDF (u8) for a custom word.
+
+        Uses lagoon's IDF formula: ln((N - n + 0.5) / (n + 0.5) + 1) * 51.
         """
         n_total = self._n_reefs
-
         if n_associated_reefs < 1:
             raise ValueError("n_associated_reefs must be >= 1")
         if n_associated_reefs > n_total:
@@ -214,72 +280,40 @@ class ReefScorer:
                 f"n_associated_reefs {n_associated_reefs} exceeds "
                 f"total reefs ({n_total})"
             )
-
-        # IDF using lagoon's formula: ln((N - n + 0.5) / (n + 0.5) + 1)
         idf = math.log(
             (n_total - n_associated_reefs + 0.5)
             / (n_associated_reefs + 0.5)
             + 1
         )
-        idf_q = max(0, min(255, round(idf * 51)))
-
-        # BM25 parameters (same as lagoon's base vocabulary)
-        k1 = 1.2
-        b = 0.75
-        avg_reef_words = self._avg_reef_words
-
-        reef_scores: list[tuple[int, int]] = []
-        for reef_id, strength in associations:
-            if reef_id < 0 or reef_id >= n_total:
-                raise ValueError(
-                    f"reef_id {reef_id} out of range [0, {n_total - 1}]"
-                )
-            if not (0.0 <= strength <= 1.0):
-                raise ValueError(
-                    f"strength must be in [0.0, 1.0], got {strength}"
-                )
-
-            tf_proxy = strength
-            reef_n_words = self._reef_n_words[reef_id]
-
-            numerator = idf * (tf_proxy * (k1 + 1))
-            denominator = tf_proxy + k1 * (
-                1 - b + b * reef_n_words / avg_reef_words
-            )
-            bm25 = numerator / denominator if denominator > 0 else 0.0
-            bm25_q = max(0, min(65535, round(bm25 * 8192)))
-
-            reef_scores.append((reef_id, bm25_q))
-
-        return idf_q, reef_scores
+        return max(0, min(255, round(idf * 51)))
 
     def add_custom_word(
         self,
         word: str,
-        reef_associations: list[tuple[int, float]],
+        reef_weights: list[tuple[int, int]],
         *,
+        idf_q: int,
         specificity: int = 2,
         tag: int = 0,
     ) -> WordInfo:
-        """Add a custom word to the vocabulary.
+        """Add a custom word to the vocabulary with pre-computed weights.
 
-        Computes IDF and BM25 scores from reef associations, validates all
-        fields, and injects the word into the scorer's vocabulary. The word
-        becomes immediately available for scoring.
+        Accepts pre-computed weight_q values and IDF. Use calc_custom_weight()
+        and calc_custom_idf() to compute these before calling.
 
         Args:
             word: The word to add (will be lowercased and whitespace-normalized).
-                For compounds, use space-separated tokens (e.g., "machine learning").
-            reef_associations: List of (reef_id, strength) pairs where strength
-                is 0.0-1.0 normalized association strength.
-            specificity: Sigma band (-2 to +2). Defaults to 2 (highly specific).
+            reef_weights: List of (reef_id, weight_q) pairs with pre-computed weights.
+            idf_q: Pre-computed quantized IDF (u8, 0-255).
+            specificity: Sigma band (-2 to +2). Defaults to 2.
+            tag: Custom tag for tracking. Defaults to 0.
 
         Returns:
             The WordInfo that was injected.
 
         Raises:
             ValueError: If the word already exists, fields are out of range,
-                or reef_associations is empty.
+                or reef_weights is empty.
         """
         from ._hash import fnv1a_u64
 
@@ -301,25 +335,23 @@ class ReefScorer:
                 f"specificity must be in [-2, -1, 0, 1, 2], got {specificity}"
             )
 
-        # Validate reef associations
-        if not reef_associations:
-            raise ValueError("reef_associations must not be empty")
+        # Validate reef_weights
+        if not reef_weights:
+            raise ValueError("reef_weights must not be empty")
 
-        for reef_id, strength in reef_associations:
+        # Validate idf_q
+        if not (0 <= idf_q <= 255):
+            raise ValueError(f"idf_q must be in [0, 255], got {idf_q}")
+
+        for reef_id, weight_q in reef_weights:
             if reef_id < 0 or reef_id >= self._n_reefs:
                 raise ValueError(
                     f"reef_id {reef_id} out of range [0, {self._n_reefs - 1}]"
                 )
-            if not (0.0 <= strength <= 1.0):
+            if not (0 <= weight_q <= 65535):
                 raise ValueError(
-                    f"strength must be in [0.0, 1.0], got {strength}"
+                    f"weight_q must be in [0, 65535], got {weight_q}"
                 )
-
-        # Compute scores (lagoon owns the BM25 formula)
-        n_associated = len(reef_associations)
-        idf_q, reef_scores = self.compute_custom_word_scores(
-            n_associated, reef_associations,
-        )
 
         # Allocate word_id
         word_id = self.next_word_id
@@ -339,7 +371,10 @@ class ReefScorer:
         self._word_lookup[word_hash] = info
         while len(self._word_reefs) <= word_id:
             self._word_reefs.append([])
-        self._word_reefs[word_id] = reef_scores
+        # Store as 3-element tuples with sentinel sub_reef_id
+        self._word_reefs[word_id] = [
+            (rid, wq, _SUB_REEF_SENTINEL) for rid, wq in reef_weights
+        ]
 
         return info
 
@@ -418,13 +453,18 @@ class ReefScorer:
                 matched_words=0,
                 unknown_words=filtered,
                 matched_word_ids=frozenset(),
+                valence_signal=0.0,
             )
             return z, tr
 
-        scores_q, word_counts = self._accumulate_bm25(word_ids)
-        raw = [sq / 8192.0 for sq in scores_q]
+        scores_q, word_counts = self._accumulate_weights(word_ids)
+        ws = self._weight_scale
+        raw = [sq / ws for sq in scores_q]
         raw = self._propagate(raw)
-        z = self._subtract_background(raw)
+        n_effective = len(word_ids)
+        if self._domainless_word_ids:
+            n_effective = len(word_ids - self._domainless_word_ids)
+        z = self._subtract_background(raw, n_matched=n_effective)
         tr = self._extract_results(z, raw, word_counts, word_ids, unknown, top_k, min_reef_z)
         return z, tr
 
@@ -447,19 +487,26 @@ class ReefScorer:
                 matched_words=0,
                 unknown_words=filtered,
                 matched_word_ids=frozenset(),
+                valence_signal=0.0,
             )
 
-        # Phase 3: BM25 accumulation (quantized integer accumulation)
-        scores_q, word_counts = self._accumulate_bm25(word_ids)
+        # Phase 3: Weight accumulation (quantized integer accumulation)
+        scores_q, word_counts = self._accumulate_weights(word_ids)
 
         # Dequantize once
-        raw_scores = [sq / 8192.0 for sq in scores_q]
+        ws = self._weight_scale
+        raw_scores = [sq / ws for sq in scores_q]
 
-        # Propagate through reef edges
+        # Propagate raw scores through reef edges first, then normalize.
+        # Propagation on raw scores (always >= 0) spreads only positive
+        # signal, which preserves discriminative power for custom words.
         raw_scores = self._propagate(raw_scores)
 
-        # Phase 4: Background subtraction
-        z_scores = self._subtract_background(raw_scores)
+        # Phase 4: Background subtraction (scaled by effective matched words)
+        n_effective = len(word_ids)
+        if self._domainless_word_ids:
+            n_effective = len(word_ids - self._domainless_word_ids)
+        z_scores = self._subtract_background(raw_scores, n_matched=n_effective)
 
         # Phase 5: Result extraction
         return self._extract_results(
@@ -467,18 +514,18 @@ class ReefScorer:
             word_ids, unknown, top_k, min_reef_z,
         )
 
-    def _accumulate_bm25(
+    def _accumulate_weights(
         self, word_ids: set[int]
     ) -> tuple[list[int], list[int]]:
-        """Phase 3: Accumulate quantized BM25 scores."""
+        """Phase 3: Accumulate quantized weight scores."""
         n = self._n_reefs
         scores_q = [0] * n
         word_counts = [0] * n
         word_reefs = self._word_reefs
 
         for word_id in word_ids:
-            for reef_id, bm25_q in word_reefs[word_id]:
-                scores_q[reef_id] += bm25_q
+            for reef_id, weight_q, _sub_reef_id in word_reefs[word_id]:
+                scores_q[reef_id] += weight_q
                 word_counts[reef_id] += 1
 
         return scores_q, word_counts
@@ -492,21 +539,75 @@ class ReefScorer:
             propagated[tgt] += raw_scores[src] * w
         return propagated
 
-    def _subtract_background(self, raw_scores: list[float]) -> list[float]:
-        """Phase 4: Convert raw BM25 to z-scores."""
-        n = self._n_reefs
+    def _subtract_background(
+        self, raw_scores: list[float], n_matched: int = 0,
+    ) -> list[float]:
+        """Phase 4: Background subtraction scaled by matched word count.
+
+        Alpha (0→1) controls how much of bg_mean to subtract:
+        - 1 matched word  → alpha=0: raw/bg_std (no mean subtraction).
+          A single word activates only a few reefs; there is no accumulated
+          common-reef noise to remove, and raw BM25 correctly identifies
+          the reef (67% accuracy vs 27% with full subtraction).
+        - 6+ matched words → alpha=1: full z-score (raw−bg_mean)/bg_std.
+          Many words accumulate signal on common "style" reefs (dialect,
+          arithmetic, logic) that must be subtracted for discrimination.
+        - In between: linear ramp.
+
+        Dividing by bg_std at all alpha values keeps scores on a
+        comparable scale and acts as reef-level IDF (specific reefs
+        with low bg_std get amplified).
+        """
         bg_mean = self._bg_mean
         bg_std = self._bg_std
-        z_scores = [0.0] * n
+        n = self._n_reefs
 
+        # Linear ramp: 0 at n_matched<=1, 1.0 at n_matched>=threshold
+        threshold = _BG_ALPHA_THRESHOLD
+        if n_matched <= 1:
+            alpha = 0.0
+        elif n_matched >= threshold:
+            alpha = 1.0
+        else:
+            alpha = (n_matched - 1) / (threshold - 1)
+
+        z_scores = [0.0] * n
         for i in range(n):
             std = bg_std[i]
-            if std > _BG_STD_FLOOR:
-                z_scores[i] = (raw_scores[i] - bg_mean[i]) / std
-            else:
-                z_scores[i] = 0.0
-
+            if std < _BG_STD_FLOOR:
+                std = _BG_STD_FLOOR
+            z_scores[i] = (raw_scores[i] - alpha * bg_mean[i]) / std
         return z_scores
+
+    def _resolve_sub_reefs(
+        self, top_reef_ids: list[int], matched_word_ids: set[int],
+    ) -> dict[int, int | None]:
+        """For each top island, resolve which gen-2 sub-reef best matches."""
+        if not self._sub_reef_meta:
+            return {}
+
+        results: dict[int, int | None] = {}
+        word_reefs = self._word_reefs
+        word_reef_detail = self._word_reef_detail
+
+        for island_id in top_reef_ids:
+            votes: dict[int, float] = defaultdict(float)
+            for word_id in matched_word_ids:
+                if word_id >= len(word_reefs):
+                    continue
+                for rid, wq, sub_rid in word_reefs[word_id]:
+                    if rid != island_id:
+                        continue
+                    if sub_rid != _SUB_REEF_SENTINEL:
+                        votes[sub_rid] += wq
+                    else:
+                        # Multi-reef: look up detail
+                        if word_id < len(word_reef_detail):
+                            for d_iid, d_srid, d_wq in word_reef_detail[word_id]:
+                                if d_iid == island_id:
+                                    votes[d_srid] += d_wq
+            results[island_id] = max(votes, key=votes.get) if votes else None
+        return results
 
     def _extract_results(
         self,
@@ -519,7 +620,7 @@ class ReefScorer:
         min_reef_z: float | None = None,
     ) -> TopicResult:
         """Phase 5: Extract top-K reefs, islands, archipelago rollup."""
-        # Sort all reefs by z-score descending
+        # Sort all reefs by z_score descending (specificity baked into bg_std)
         indexed = sorted(
             range(self._n_reefs), key=lambda i: z_scores[i], reverse=True,
         )
@@ -530,21 +631,35 @@ class ReefScorer:
             selected = indexed[:top_k]
 
         reef_meta = self._reef_meta
+        sub_reef_map = self._resolve_sub_reefs(selected, matched)
+        sub_reef_meta = self._sub_reef_meta
         top_reefs = [
             ScoredReef(
                 reef_id=i,
                 z_score=z_scores[i],
-                raw_bm25=raw_scores[i],
+                raw_score=raw_scores[i],
                 n_contributing_words=word_counts[i],
                 name=reef_meta[i].name,
+                quality_score=z_scores[i],
+                valence=reef_meta[i].valence,
+                avg_specificity=reef_meta[i].avg_specificity,
+                resolved_sub_reef_id=sub_reef_map.get(i),
+                resolved_sub_reef_name=(
+                    sub_reef_meta[sub_reef_map[i]].name
+                    if sub_reef_map.get(i) is not None
+                    and sub_reef_map[i] < len(sub_reef_meta)
+                    else None
+                ),
             )
             for i in selected
         ]
 
-        # Confidence: gap between #1 and #2
-        confidence = 0.0
-        if len(indexed) >= 2:
-            confidence = z_scores[indexed[0]] - z_scores[indexed[1]]
+        # Confidence: strength of the strongest signal above noise.
+        # Using the top z-score (clamped to 0) rather than the gap between
+        # #1 and #2 — the gap penalises queries that correctly activate
+        # multiple related reefs, producing artificially low confidence
+        # as the number of reefs increases.
+        confidence = max(0.0, z_scores[indexed[0]]) if indexed else 0.0
 
         # Coverage
         total_words = len(matched) + len(unknown)
@@ -552,6 +667,19 @@ class ReefScorer:
 
         # Filter stop words from unknown list
         filtered_unknown = [w for w in unknown if w not in STOP_WORDS]
+
+        # Valence signal: z-score-weighted mean of reef valences
+        valence_signal = 0.0
+        if selected:
+            qs_sum = 0.0
+            val_weighted = 0.0
+            for i in selected:
+                z = z_scores[i]
+                if z > 0.0:
+                    val_weighted += z * reef_meta[i].valence
+                    qs_sum += z
+            if qs_sum > 0.0:
+                valence_signal = val_weighted / qs_sum
 
         # Island rollup from selected reefs
         island_agg: dict[int, list[float | int]] = defaultdict(lambda: [0.0, 0])
@@ -581,6 +709,9 @@ class ReefScorer:
             aid = island_meta[island.island_id].arch_id
             arch_scores[aid] += island.aggregate_z
 
+        # Count domainless matches: words recognized but not domain-specific
+        n_domainless = len(matched & self._domainless_word_ids) if self._domainless_word_ids else 0
+
         return TopicResult(
             top_reefs=top_reefs,
             top_islands=top_islands,
@@ -590,4 +721,6 @@ class ReefScorer:
             matched_words=len(matched),
             unknown_words=filtered_unknown,
             matched_word_ids=frozenset(matched),
+            n_domainless=n_domainless,
+            valence_signal=valence_signal,
         )

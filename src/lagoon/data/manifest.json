@@ -1,37 +1,28 @@
 {
-  "version": "2.0",
+  "version": "6.0",
   "format": "msgpack",
-  "v2_format": "flat_binary",
-  "build_timestamp": "2026-02-17T05:30:40Z",
+  "build_timestamp": "2026-02-24T07:13:38Z",
   "files": {
-    "word_lookup.bin": "e4a68f2a6a4c9370a4decc53ace52b277ca513ec1a983afa2b0dff331ed23363",
-    "word_reefs.bin": "da407a7715b8297d226d803db297ac56c3bc29aee46940db6afb67e824699c38",
-    "reef_meta.bin": "349d479be5c3810b71738847fb6c721c6ca189a65e259b275c5315726ab03e85",
-    "island_meta.bin": "548a4c7bee0adf25f26b93aabda6d1426f6dbe1fd7f30d42c88dfc8dfbbc2710",
-    "background.bin": "6c726403cbbcbca6530572e3b784e18e62feaa956e90a31e0bd0411b7bccdfa2",
-    "compounds.bin": "af823a106bfa6911f0547c83c4664b581ce6381ee104745293f82ef927842fdc",
-    "constants.bin": "7c61136f862a3f22aad104347066905756b3417819cf8134ed6f0acf7c22c2b5",
-    "reef_edges.bin": "773de808f0caf2167b4321828d38976a50d396f7349614580a411bc35d70c450"
-  },
-  "v2_files": {
-    "word_lookup.bin": "b4af669087e32161296d7685f11d67e8e456916698e95d7fafed0f4ab8766ff7",
-    "word_reefs.bin": "943386029b2280bf0001e7ec7613672f9e4a07cecb528cf6ccffef555b846dd3",
-    "reef_meta.bin": "624643acb1d4040588de0d7b55427750dcb32eaa1cb179eaa5382c14e03717e2",
-    "island_meta.bin": "bfc82d09510e00227f70420c67c0ba4f28f959d6422a57c3a948199550bfbba3",
-    "background.bin": "520510af610f92fba07d91f63af3457717698fb77dd16756c715c0e67764919a",
-    "compounds.bin": "ff129029db113b2ae2a8511029d484d07f9a2bd644d385db504863625cdb919d",
-    "constants.bin": "34d27719b158c3e64482a536dc5bd5be821f0717ee82f91b8c0c950847219691",
-    "reef_edges.bin": "7aa18e7f23e68c62ab7d99ce34e5182b2889544e153230d4f8e2eaf8188e3028"
+    "word_lookup.bin": "7a636855da09f11f0da1d5bb063badbd2af917ac82531f9377bf851e5c99b680",
+    "word_reefs.bin": "4c892d5388ae8abe7f0ab0c90967d050dcf830e9a03d2092cff43ef4dea9f713",
+    "reef_meta.bin": "8426a662d81301ad562cf89d162a0112c8f75c4578e13eba5aff9c66f8bcf631",
+    "island_meta.bin": "abdcea6d88ef1b20450b6c38c386014b0f46b5b4118a4caf90a8db775000846c",
+    "background.bin": "6dfcefc6d8b850d3092b28cfdc69a787b99a10d298ec59760ed0a6573d58c5b1",
+    "compounds.bin": "2bebf687f276c3d21145d57dd18815d06d2edfd275bf417b3d19a3cbd0e5c425",
+    "constants.bin": "6b3e4daa79f81518e8e4a5bf0485755a027eeb75dad00f91bae554fb2fbd9ef5",
+    "reef_edges.bin": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+    "word_reef_detail.bin": "aa4dc376eaec53fb6b5972fbb37d32fa6ae2a1a9c1db0f5dc61318b0358401e1",
+    "sub_reef_meta.bin": "1c77355decb76a3146cd713a357382e21051b64322c4ffb5c97715a69ca31b17"
   },
   "stats": {
-    "n_reefs": 283,
-    "n_islands": 67,
-    "n_archs": 5,
-    "n_words": 146698,
-    "n_lookup_entries": 173286,
-    "n_words_with_reefs": 146697,
-    "n_compounds": 63912,
-    "n_edges": 7555,
-    "edge_weight_threshold": 0.01
+    "n_reefs": 444,
+    "n_islands": 444,
+    "n_archs": 10,
+    "n_words": 158060,
+    "n_lookup_entries": 186184,
+    "n_words_with_reefs": 115511,
+    "n_compounds": 69793,
+    "n_sub_reefs": 4702,
+    "n_edges": 0
   }
 }
