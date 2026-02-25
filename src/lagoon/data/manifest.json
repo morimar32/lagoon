@@ -1,28 +1,28 @@
 {
-  "version": "6.0",
+  "version": "7.0",
   "format": "msgpack",
-  "build_timestamp": "2026-02-24T07:13:38Z",
+  "build_timestamp": "2026-02-25T07:07:22Z",
   "files": {
-    "word_lookup.bin": "7a636855da09f11f0da1d5bb063badbd2af917ac82531f9377bf851e5c99b680",
-    "word_reefs.bin": "4c892d5388ae8abe7f0ab0c90967d050dcf830e9a03d2092cff43ef4dea9f713",
-    "reef_meta.bin": "8426a662d81301ad562cf89d162a0112c8f75c4578e13eba5aff9c66f8bcf631",
-    "island_meta.bin": "abdcea6d88ef1b20450b6c38c386014b0f46b5b4118a4caf90a8db775000846c",
-    "background.bin": "6dfcefc6d8b850d3092b28cfdc69a787b99a10d298ec59760ed0a6573d58c5b1",
+    "word_lookup.bin": "4d42eb359da7a36c084dae9c23fdf4436ab92a11f4cb44465639aadafedd104d",
+    "word_reefs.bin": "f0ce97bc590e9f4e3676f4bc2e5560397ca870c91724dd566396cc285f003828",
+    "reef_meta.bin": "aba5ab81fe3424f03be5e1cd7f3070eb1cac6ec917bd188c8017c5a83e9fe272",
+    "island_meta.bin": "46ba49a32f640f1436f01e49c687373aa3ad401efd8ee1d0b3611c04265a7157",
+    "background.bin": "c089f67bcc986d9c864c0ba29af38a3340ca422589160d70bd84531ab7b9a554",
     "compounds.bin": "2bebf687f276c3d21145d57dd18815d06d2edfd275bf417b3d19a3cbd0e5c425",
-    "constants.bin": "6b3e4daa79f81518e8e4a5bf0485755a027eeb75dad00f91bae554fb2fbd9ef5",
+    "constants.bin": "769c1d1c66a86706d7ae0416202018761754ff45060ac86d4fec7a66ba89e6cf",
     "reef_edges.bin": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
     "word_reef_detail.bin": "aa4dc376eaec53fb6b5972fbb37d32fa6ae2a1a9c1db0f5dc61318b0358401e1",
-    "sub_reef_meta.bin": "1c77355decb76a3146cd713a357382e21051b64322c4ffb5c97715a69ca31b17"
+    "sub_reef_meta.bin": "f8a2d77a5ac27b500ea5856d07f5e9d43afa387eb65629f626a853ed47e775a6"
   },
   "stats": {
-    "n_reefs": 444,
-    "n_islands": 444,
-    "n_archs": 10,
+    "n_reefs": 258,
+    "n_islands": 258,
+    "n_archs": 8,
     "n_words": 158060,
     "n_lookup_entries": 186184,
-    "n_words_with_reefs": 115511,
+    "n_words_with_reefs": 89715,
     "n_compounds": 69793,
-    "n_sub_reefs": 4702,
+    "n_sub_reefs": 2534,
     "n_edges": 0
   }
 }

@@ -14,7 +14,7 @@ import msgpack
 from ._errors import LagoonChecksumError, LagoonError, LagoonVersionError
 from ._types import IslandMeta, ReefMeta, SubReefMeta, WordInfo
 
-_EXPECTED_VERSION = "6.0"
+_EXPECTED_VERSION = "7.0"
 
 _DATA_FILES = (
     "word_lookup.bin",

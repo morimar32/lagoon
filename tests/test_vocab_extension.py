@@ -48,10 +48,10 @@ def test_calc_custom_weight(scorer):
     w_half = scorer.calc_custom_weight(42, 0.5)
     w_low = scorer.calc_custom_weight(42, 0.1)
 
-    # All in u16 range
-    assert 0 <= w_full <= 65535
-    assert 0 <= w_half <= 65535
-    assert 0 <= w_low <= 65535
+    # All in u8 range
+    assert 0 <= w_full <= 255
+    assert 0 <= w_half <= 255
+    assert 0 <= w_low <= 255
 
     # Strength ordering preserved
     assert w_full >= w_half >= w_low
@@ -141,13 +141,13 @@ def test_add_custom_word_duplicate_rejected(scorer):
     """Adding a word that already exists should raise ValueError."""
     # "brain" is in the base vocabulary
     with pytest.raises(ValueError, match="already exists"):
-        scorer.add_custom_word("brain", reef_weights=[(42, 500)], idf_q=100)
+        scorer.add_custom_word("brain", reef_weights=[(42, 200)], idf_q=100)
 
 
 def test_add_custom_word_empty_rejected(scorer):
     """Empty word should raise ValueError."""
     with pytest.raises(ValueError, match="must not be empty"):
-        scorer.add_custom_word("", reef_weights=[(42, 500)], idf_q=100)
+        scorer.add_custom_word("", reef_weights=[(42, 200)], idf_q=100)
 
 
 def test_add_custom_word_bad_specificity(scorer):
@@ -155,7 +155,7 @@ def test_add_custom_word_bad_specificity(scorer):
     with pytest.raises(ValueError, match="specificity"):
         scorer.add_custom_word(
             "testword123",
-            reef_weights=[(42, 500)],
+            reef_weights=[(42, 200)],
             idf_q=100,
             specificity=5,
         )
@@ -170,7 +170,7 @@ def test_add_custom_word_empty_weights(scorer):
 def test_add_custom_word_bad_reef_id(scorer):
     """Out-of-range reef_id should raise ValueError."""
     with pytest.raises(ValueError, match="reef_id.*out of range"):
-        scorer.add_custom_word("testword789", reef_weights=[(999, 500)], idf_q=100)
+        scorer.add_custom_word("testword789", reef_weights=[(999, 200)], idf_q=100)
 
 
 def test_add_custom_word_bad_weight_q(scorer):

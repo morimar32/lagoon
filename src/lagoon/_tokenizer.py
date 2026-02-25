@@ -106,6 +106,91 @@ class Tokenizer:
 
         return matched, unknown
 
+    def _scan_compounds_with_spans(
+        self, text_lower: str
+    ) -> list[tuple[int, int, int]]:
+        """Compound scan returning (start, end, word_id) triples, sorted by start."""
+        raw_matches: list[tuple[int, int, int]] = []
+        for end_inclusive, idx in self._compound_ac.iter(text_lower):
+            end = end_inclusive + 1
+            start = end - len(self._compound_strings[idx])
+            raw_matches.append((start, end, idx))
+
+        raw_matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
+
+        # Greedy leftmost-longest non-overlapping
+        result: list[tuple[int, int, int]] = []
+        last_end = -1
+        for start, end, idx in raw_matches:
+            if start >= last_end:
+                result.append((start, end, self._compound_word_ids[idx]))
+                last_end = end
+        return result
+
+    def process_ordered(
+        self, text: str
+    ) -> tuple[list[int | None], set[int], list[str], int]:
+        """Tokenize with order preservation.
+
+        Returns:
+            word_ids_ordered: word_id per position (None = stop/unknown),
+                              compounds = one entry at their text position
+            word_ids_set: deduplicated set of matched word_ids
+            unknown_words: unrecognized tokens
+            total_tokens: count of all tokens seen (including stop/unknown)
+        """
+        text_lower = text.lower()
+        compound_spans = self._scan_compounds_with_spans(text_lower)
+
+        ordered: list[int | None] = []
+        matched_set: set[int] = set()
+        unknown: list[str] = []
+        total_tokens = 0
+
+        # Track which compound spans have been emitted
+        emitted_compounds: set[int] = set()  # index into compound_spans
+
+        for m in _WORD_RE.finditer(text_lower):
+            tok_start, tok_end = m.start(), m.end()
+
+            # Check if this token is inside a compound span
+            compound_match = -1
+            for ci, (cs, ce, cid) in enumerate(compound_spans):
+                if tok_start >= cs and tok_end <= ce:
+                    compound_match = ci
+                    break
+
+            if compound_match >= 0:
+                # Inside a compound — emit once at first constituent token
+                if compound_match not in emitted_compounds:
+                    emitted_compounds.add(compound_match)
+                    cid = compound_spans[compound_match][2]
+                    ordered.append(cid)
+                    matched_set.add(cid)
+                    total_tokens += 1
+                continue
+
+            total_tokens += 1
+            token = m.group()
+            h = fnv1a_u64(token)
+            info = self._word_lookup.get(h)
+            if info is not None:
+                ordered.append(info.word_id)
+                matched_set.add(info.word_id)
+            else:
+                stem = self._stemmer.stemWord(token)
+                if stem != token:
+                    sh = fnv1a_u64(stem)
+                    info = self._word_lookup.get(sh)
+                    if info is not None:
+                        ordered.append(info.word_id)
+                        matched_set.add(info.word_id)
+                        continue
+                unknown.append(token)
+                ordered.append(None)
+
+        return ordered, matched_set, unknown, total_tokens
+
     def process(self, text: str) -> tuple[set[int], list[str]]:
         """Run full tokenization pipeline (Phase 1 + Phase 2).
 

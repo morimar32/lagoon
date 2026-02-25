@@ -45,6 +45,32 @@ class SubReefMeta:
     name: str
 
 
+@dataclass(slots=True)
+class ReefHit:
+    reef_id: int            # index into reef_meta
+    score: int              # u8 percentile from export (0-255)
+    island_idx: int         # index into TextResult.islands (-1 if none)
+    next_idx: int           # next ReefHit for same word (-1 = end of chain)
+
+
+@dataclass(slots=True)
+class IslandEntry:
+    island_id: int               # index into island_meta
+    reef_hit_indices: list[int]  # indices into TextResult.reef_hits
+    word_count: int              # distinct words hitting reefs in this island
+
+
+@dataclass(slots=True)
+class TextResult:
+    reef_hits: list[ReefHit]      # Array 1: flat, linked-list threaded per word
+    word_order: list[int]         # Array 2: text-order indices into reef_hits (-1 = no reef)
+    islands: list[IslandEntry]    # Array 3: island summaries with backrefs to reef_hits
+    total_words: int
+    matched_words: int
+    domainless_words: int
+    dropped_words: int            # stop words + unknown
+
+
 @dataclass(slots=True, frozen=True)
 class ScoredReef:
     reef_id: int

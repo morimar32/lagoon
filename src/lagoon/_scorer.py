@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING
 
 from ._document import analyze_document
 from ._stop_words import STOP_WORDS
+from ._text_result import build_text_result
 from ._tokenizer import Tokenizer
 from ._types import (
     DocumentAnalysis,
     ScoredIsland,
     ScoredReef,
     SubReefMeta,
+    TextResult,
     TopicResult,
     WordInfo,
 )
@@ -21,6 +23,13 @@ from ._types import (
 _BG_STD_FLOOR = 0.01  # Minimum credible bg_std; anything below is epsilon noise
 _BG_ALPHA_THRESHOLD = 6  # matched words at which full bg subtraction kicks in
 _SUB_REEF_SENTINEL = 0xFFFF
+
+# 4-pass contextual scoring constants
+_NOISE_SCORE_FLOOR = 48      # ~19th percentile on u8 scale; hits below are pruned
+_CONTEXT_RAMP_WORDS = 3      # words before full context influence
+_CONTEXT_GAMMA = 0.3         # max boost multiplier for island coherence
+_CONTEXT_THRESHOLD = 1.0     # island activation level for "established"
+_CONTEXTUAL_MIN_WORDS = 4    # minimum matched words to engage contextual path
 
 if TYPE_CHECKING:
     import ahocorasick
@@ -99,9 +108,16 @@ class ReefScorer:
     # -- Public scoring API --
 
     def score(self, text: str, top_k: int = 10, *, min_reef_z: float | None = None) -> TopicResult:
-        """Score a single text string through the full 5-phase pipeline."""
-        word_ids, unknown = self._tokenizer.process(text)
-        return self._score_from_ids(word_ids, unknown, top_k, min_reef_z)
+        """Score text. Uses 4-pass contextual path for longer text, simple path for short."""
+        ordered, word_ids, unknown, total_tokens = self._tokenizer.process_ordered(text)
+        n_effective = len(word_ids - self._domainless_word_ids) if self._domainless_word_ids else len(word_ids)
+
+        if n_effective < _CONTEXTUAL_MIN_WORDS:
+            return self._score_from_ids(word_ids, unknown, top_k, min_reef_z)
+
+        return self._score_contextual(
+            ordered, word_ids, unknown, total_tokens, n_effective, top_k, min_reef_z,
+        )
 
     def score_batch(
         self, texts: list[str], top_k: int = 10, *, min_reef_z: float | None = None,
@@ -134,14 +150,27 @@ class ReefScorer:
 
         Used internally by document analysis.
         """
-        word_ids, _ = self._tokenizer.process(text)
+        ordered, word_ids, unknown, total_tokens = self._tokenizer.process_ordered(text)
         if not word_ids:
             return [0.0] * self._n_reefs
+
+        n_effective = len(word_ids - self._domainless_word_ids) if self._domainless_word_ids else len(word_ids)
+
+        if n_effective >= _CONTEXTUAL_MIN_WORDS:
+            tr = build_text_result(
+                ordered, unknown, total_tokens,
+                self._word_reefs, self._reef_meta, self._domainless_word_ids,
+            )
+            self._filter_noise(tr)
+            raw, _ = self._evaluate_contextual(tr)
+            raw = self._propagate(raw)
+            return self._subtract_background(raw, n_matched=n_effective)
+
         scores_q, _ = self._accumulate_weights(word_ids)
         ws = self._weight_scale
         raw = [sq / ws for sq in scores_q]
         raw = self._propagate(raw)
-        return self._subtract_background(raw)
+        return self._subtract_background(raw, n_matched=n_effective)
 
     def analyze(
         self,
@@ -258,14 +287,14 @@ class ReefScorer:
     def calc_custom_weight(self, reef_id: int, strength: float) -> int:
         """Compute a per-reef calibrated weight_q for a custom word.
 
-        Returns round(p75[reef_id] * strength), clamped to u16.
+        Returns round(p75[reef_id] * strength), clamped to u8.
         """
         if reef_id < 0 or reef_id >= self._n_reefs:
             raise ValueError(
                 f"reef_id {reef_id} out of range [0, {self._n_reefs - 1}]"
             )
         raw = round(self._reef_weight_p75[reef_id] * strength)
-        return max(0, min(65535, raw))
+        return max(0, min(255, raw))
 
     def calc_custom_idf(self, n_associated_reefs: int) -> int:
         """Compute quantized IDF (u8) for a custom word.
@@ -348,9 +377,9 @@ class ReefScorer:
                 raise ValueError(
                     f"reef_id {reef_id} out of range [0, {self._n_reefs - 1}]"
                 )
-            if not (0 <= weight_q <= 65535):
+            if not (0 <= weight_q <= 255):
                 raise ValueError(
-                    f"weight_q must be in [0, 65535], got {weight_q}"
+                    f"weight_q must be in [0, 255], got {weight_q}"
                 )
 
         # Allocate word_id
@@ -438,7 +467,7 @@ class ReefScorer:
         z-score vector (for boundary detection) and the TopicResult
         (for per-sentence results) are needed.
         """
-        word_ids, unknown = self._tokenizer.process(text)
+        ordered, word_ids, unknown, total_tokens = self._tokenizer.process_ordered(text)
 
         if not word_ids:
             z = [0.0] * self._n_reefs
@@ -457,14 +486,24 @@ class ReefScorer:
             )
             return z, tr
 
-        scores_q, word_counts = self._accumulate_weights(word_ids)
-        ws = self._weight_scale
-        raw = [sq / ws for sq in scores_q]
-        raw = self._propagate(raw)
-        n_effective = len(word_ids)
-        if self._domainless_word_ids:
-            n_effective = len(word_ids - self._domainless_word_ids)
-        z = self._subtract_background(raw, n_matched=n_effective)
+        n_effective = len(word_ids - self._domainless_word_ids) if self._domainless_word_ids else len(word_ids)
+
+        if n_effective >= _CONTEXTUAL_MIN_WORDS:
+            text_result = build_text_result(
+                ordered, unknown, total_tokens,
+                self._word_reefs, self._reef_meta, self._domainless_word_ids,
+            )
+            self._filter_noise(text_result)
+            raw, word_counts = self._evaluate_contextual(text_result)
+            raw = self._propagate(raw)
+            z = self._subtract_background(raw, n_matched=n_effective)
+        else:
+            scores_q, word_counts = self._accumulate_weights(word_ids)
+            ws = self._weight_scale
+            raw = [sq / ws for sq in scores_q]
+            raw = self._propagate(raw)
+            z = self._subtract_background(raw, n_matched=n_effective)
+
         tr = self._extract_results(z, raw, word_counts, word_ids, unknown, top_k, min_reef_z)
         return z, tr
 
@@ -514,8 +553,138 @@ class ReefScorer:
             word_ids, unknown, top_k, min_reef_z,
         )
 
+    def _score_contextual(
+        self,
+        ordered: list[int | None],
+        word_ids: set[int],
+        unknown: list[str],
+        total_tokens: int,
+        n_effective: int,
+        top_k: int,
+        min_reef_z: float | None,
+    ) -> TopicResult:
+        """4-pass contextual scoring for longer texts."""
+        # Build TextResult structure
+        tr = build_text_result(
+            ordered, unknown, total_tokens,
+            self._word_reefs, self._reef_meta, self._domainless_word_ids,
+        )
+
+        # Pass 3: Noise filtering (in-place)
+        self._filter_noise(tr)
+
+        # Pass 4: Contextual evaluation
+        raw_scores, word_counts = self._evaluate_contextual(tr)
+
+        # Propagate through reef edges
+        raw_scores = self._propagate(raw_scores)
+
+        # Background subtraction
+        z_scores = self._subtract_background(raw_scores, n_matched=n_effective)
+
+        # Result extraction
+        return self._extract_results(
+            z_scores, raw_scores, word_counts,
+            word_ids, unknown, top_k, min_reef_z,
+        )
+
+    def _filter_noise(self, tr: TextResult) -> None:
+        """In-place noise filtering. Zeroes out low-confidence reef hits.
+
+        Two filters:
+        1. Score floor: hits below NOISE_SCORE_FLOOR are zeroed out
+        2. Island corroboration: for texts with 8+ matched words, islands
+           with only 1 contributing word get their hits dampened (halved)
+        """
+        if tr.matched_words < _CONTEXTUAL_MIN_WORDS:
+            return
+
+        # Filter 1: Score floor — zero out weak hits
+        for hit in tr.reef_hits:
+            if hit.score > 0 and hit.score < _NOISE_SCORE_FLOOR:
+                hit.score = 0
+
+        # Filter 2: Island corroboration — dampen single-word islands
+        if tr.matched_words >= 6:
+            for island in tr.islands:
+                if island.word_count == 1:
+                    for hit_idx in island.reef_hit_indices:
+                        hit = tr.reef_hits[hit_idx]
+                        if hit.score > 0:
+                            hit.score = hit.score // 2
+
+    def _evaluate_contextual(
+        self, tr: TextResult,
+    ) -> tuple[list[float], list[int]]:
+        """Walk word_order sequentially with island-coherence boosting.
+
+        Returns (raw_scores[n_reefs], word_counts[n_reefs]).
+        """
+        n = self._n_reefs
+        raw_scores = [0.0] * n
+        word_counts = [0] * n
+        ws = self._weight_scale
+        n_islands = len(tr.islands)
+        island_activation = [0.0] * n_islands
+
+        words_processed = 0
+
+        for head_idx in tr.word_order:
+            if head_idx == -1:
+                continue
+
+            # Context ramp: no boost for first word, full boost after N words
+            context_alpha = min(1.0, words_processed / _CONTEXT_RAMP_WORDS) if _CONTEXT_RAMP_WORDS > 0 else 1.0
+
+            # Accumulate scores from this word's reef chain
+            word_contributions: list[tuple[int, float]] = []  # (island_idx, contribution)
+            reefs_hit: set[int] = set()
+
+            hit_idx = head_idx
+            while hit_idx != -1:
+                hit = tr.reef_hits[hit_idx]
+                if hit.score > 0:
+                    base = hit.score / ws
+
+                    # Boost if this reef's island is already active
+                    boost = 0.0
+                    if hit.island_idx >= 0:
+                        activation = island_activation[hit.island_idx]
+                        boost = context_alpha * _CONTEXT_GAMMA * min(1.0, activation / _CONTEXT_THRESHOLD)
+
+                    contribution = base * (1.0 + boost)
+                    raw_scores[hit.reef_id] += contribution
+
+                    if hit.reef_id not in reefs_hit:
+                        word_counts[hit.reef_id] += 1
+                        reefs_hit.add(hit.reef_id)
+
+                    if hit.island_idx >= 0:
+                        word_contributions.append((hit.island_idx, contribution))
+
+                hit_idx = hit.next_idx
+
+            # Update island activations from this word's contributions
+            for island_idx, contrib in word_contributions:
+                island_activation[island_idx] += contrib
+
+            words_processed += 1
+
+        # Reef-level corroboration: for longer texts, penalize reefs where
+        # only a small fraction of matched words contribute.  This suppresses
+        # noise reefs that get signal from a few generic words (e.g. "provide",
+        # "main") while leaving well-corroborated reefs untouched.
+        if tr.matched_words >= 6:
+            min_contrib = max(2, tr.matched_words // 3)  # ~33% of matched words
+            for reef_id in range(n):
+                wc = word_counts[reef_id]
+                if 0 < wc < min_contrib:
+                    raw_scores[reef_id] *= wc / min_contrib
+
+        return raw_scores, word_counts
+
     def _accumulate_weights(
-        self, word_ids: set[int]
+        self, word_ids: set[int], score_floor: int = 0,
     ) -> tuple[list[int], list[int]]:
         """Phase 3: Accumulate quantized weight scores."""
         n = self._n_reefs
@@ -525,6 +694,8 @@ class ReefScorer:
 
         for word_id in word_ids:
             for reef_id, weight_q, _sub_reef_id in word_reefs[word_id]:
+                if weight_q < score_floor:
+                    continue
                 scores_q[reef_id] += weight_q
                 word_counts[reef_id] += 1
 
