@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from ._keywords import extract_segment_keywords
 from ._sentence import split_sentences
 from ._types import DocumentAnalysis, TopicSegment
 
@@ -186,6 +187,7 @@ def analyze_document(
             end_idx=0,
             topic=topic,
             sentence_results=[topic],
+            keywords=extract_segment_keywords(sentences[0]),
         )
         return DocumentAnalysis(
             segments=[seg], n_sentences=1, n_segments=1, boundaries=[],
@@ -242,6 +244,7 @@ def analyze_document(
             end_idx=end,
             topic=topic,
             sentence_results=seg_sentence_results,
+            keywords=extract_segment_keywords(combined),
         ))
 
     # Actual boundaries are the starts of segments after the first

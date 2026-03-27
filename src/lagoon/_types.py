@@ -16,7 +16,8 @@ class WordInfo:
 
 @dataclass(slots=True)
 class ReefMeta:
-    reef_id: int          # positional index
+    """Internal: holds town-level data from the upstream hierarchy."""
+    reef_id: int          # positional index (actually town_id in upstream)
     hierarchy_addr: int   # u32 bit-packed: arch(16)|island(16)
     n_words: int
     name: str
@@ -46,6 +47,25 @@ class SubReefMeta:
 
 
 @dataclass(slots=True)
+class TownMeta:
+    town_id: int          # positional index
+    island_id: int        # parent island (= lagoon reef_id)
+    name: str
+    n_words: int
+    tqf: int              # town quality factor (0-255, placeholder 128)
+    avg_specificity: float
+
+
+@dataclass(slots=True)
+class V3ReefMeta:
+    reef_id: int          # positional index
+    town_id: int          # parent town
+    name: str
+    n_words: int
+    avg_specificity: float
+
+
+@dataclass(slots=True)
 class ReefHit:
     reef_id: int            # index into reef_meta
     score: int              # u8 percentile from export (0-255)
@@ -72,8 +92,8 @@ class TextResult:
 
 
 @dataclass(slots=True, frozen=True)
-class ScoredReef:
-    reef_id: int
+class ScoredTown:
+    town_id: int
     z_score: float
     raw_score: float
     n_contributing_words: int
@@ -86,17 +106,27 @@ class ScoredReef:
 
 
 @dataclass(slots=True, frozen=True)
+class ScoredReef:
+    reef_id: int
+    town_id: int
+    raw_score: float
+    n_contributing_words: int
+    name: str
+
+
+@dataclass(slots=True, frozen=True)
 class ScoredIsland:
     island_id: int
     aggregate_z: float
-    n_contributing_reefs: int
+    n_contributing_towns: int
     name: str
 
 
 @dataclass(slots=True, frozen=True)
 class TopicResult:
-    top_reefs: list[ScoredReef]
+    top_towns: list[ScoredTown]
     top_islands: list[ScoredIsland]
+    top_reefs: list[ScoredReef]
     arch_scores: list[float]     # len=N_ARCHS
     confidence: float
     coverage: float
@@ -114,6 +144,7 @@ class TopicSegment:
     end_idx: int    # inclusive
     topic: TopicResult
     sentence_results: list[TopicResult] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True, frozen=True)
@@ -122,3 +153,72 @@ class DocumentAnalysis:
     n_sentences: int
     n_segments: int
     boundaries: list[int]   # sentence indices where topic shifts
+
+
+# =====================================================================
+# Profiler types — multi-lens reconciliation
+# =====================================================================
+
+@dataclass(slots=True, frozen=True)
+class RegisterSignal:
+    """Cross-lens register estimate derived from coverage ratios."""
+    label: str              # "technical", "casual", "narrative", "mixed"
+    domain_coverage: float  # fraction of tokens matched by domain lens
+    human_coverage: float   # fraction of tokens matched by human lens
+    overlap_fraction: float # fraction of matched tokens hit by BOTH lenses
+    score: float            # 0.0 = fully casual → 1.0 = fully technical
+
+
+@dataclass(slots=True, frozen=True)
+class POVSignal:
+    """Point-of-view signal derived from pronoun distribution.
+
+    Detected at chunk level (not per-word). Returns None from the Profiler
+    when insufficient evidence (< min_evidence pronoun tokens).
+    """
+    dominant: str          # "first", "second", "impersonal", "mixed"
+    first_ratio: float     # 1st person pronouns / total tokens
+    second_ratio: float    # 2nd person pronouns / total tokens
+    evidence: int          # number of pronoun tokens found
+
+
+@dataclass(slots=True, frozen=True)
+class TextProfile:
+    """Multi-lens scoring result with cross-lens reconciliation."""
+    lenses: dict[str, TopicResult]  # keyed by lens name ("domain", "human", ...)
+    register: RegisterSignal        # derived from cross-lens coverage
+    pov: POVSignal | None = None    # None = insufficient evidence
+    sentiment: float | None = None  # future: -1.0 (negative) to 1.0 (positive)
+    formality: float | None = None  # future: 0.0 (informal) to 1.0 (formal)
+    names_detected: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True, frozen=True)
+class ProfiledSegment:
+    """A document segment with multi-lens profiling."""
+    sentences: list[str]
+    start_idx: int
+    end_idx: int    # inclusive
+    profile: TextProfile
+    keywords: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True, frozen=True)
+class DocumentProfile:
+    """Document-level analysis with multi-lens profiling per segment."""
+    segments: list[ProfiledSegment]
+    n_sentences: int
+    n_segments: int
+    boundaries: list[int]   # sentence indices where topic shifts
+
+
+@dataclass(slots=True)
+class LookupData:
+    """Optional reference data from the lookup database.
+
+    All fields are safe to use without null-checking — they default to
+    empty collections when the lookup data is not available.
+    """
+    equivalences: dict[int, list[int]]  # variant_hash (u64) → [word_id, ...]
+    word_tags: dict[str, list[list[str]]]  # word → [[tag_type, tag_value], ...]
+    names: frozenset[str]  # set of first names for detection

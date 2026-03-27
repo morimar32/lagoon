@@ -44,24 +44,31 @@ print(len(result.matched_word_ids))    # 6 (set of word_ids that matched)
 
 | Field | Type | What it tells you |
 |-------|------|-------------------|
-| `top_reefs` | `list[ScoredReef]` | Top 10 reefs ranked by z-score |
+| `top_reefs` | `list[ScoredReef]` | Top 10 towns ranked by z-score (named "reefs" for API compat) |
 | `top_islands` | `list[ScoredIsland]` | Island-level rollup (mid-level clusters) |
-| `arch_scores` | `list[float]` | 5 archipelago-level scores |
-| `confidence` | `float` | Gap between #1 and #2 reef z-scores |
+| `arch_scores` | `list[float]` | 6 archipelago-level scores |
+| `confidence` | `float` | Top z-score (clamped to 0) |
 | `coverage` | `float` | Fraction of input words found in the dictionary |
 | `matched_words` | `int` | Number of words that hit the dictionary |
 | `unknown_words` | `list[str]` | Words that failed lookup + stemmer fallback (stop words excluded) |
 | `matched_word_ids` | `frozenset[int]` | Set of word_ids that matched (for cross-referencing) |
+| `n_domainless` | `int` | Words recognized but not domain-specific |
+| `valence_signal` | `float` | z-score-weighted mean of town valences |
 
 Each `ScoredReef` has:
 
 ```python
 reef = result.top_reefs[0]
-reef.reef_id               # 0-282
+reef.reef_id               # 0-297 (town index)
 reef.z_score               # background-subtracted score
-reef.raw_bm25              # raw BM25 before background subtraction
-reef.n_contributing_words   # how many input words activated this reef
+reef.raw_score             # raw score before background subtraction
+reef.n_contributing_words   # how many input words activated this town
 reef.name                   # human-readable label
+reef.quality_score          # z-score (IQF modulation placeholder)
+reef.valence                # town valence
+reef.avg_specificity        # average word specificity in this town
+reef.resolved_sub_reef_id   # sub-town reef resolution (always None in V3 — not yet wired up)
+reef.resolved_sub_reef_name # sub-town reef name (always None in V3)
 ```
 
 ### Interpreting results
@@ -90,11 +97,11 @@ for r in results:
 ```python
 info = scorer.lookup_word("cortex")
 info.specificity   # +1 (domain-specific)
-info.idf_q / 51.0  # 3.63 (high IDF = appears in few reefs)
+info.idf_q / 51.0  # high IDF = appears in few towns
 info.word_id       # index into internal data
 
 info = scorer.lookup_word("brain")
-info.specificity   # -1 (universal, appears across many reefs)
+info.specificity   # -1 (universal, appears across many towns)
 
 scorer.lookup_word("xyzzy")  # None (not in vocabulary)
 ```
@@ -198,17 +205,22 @@ print(unknowns)  # ["kubernetes", "terraform", "xyzzy"]
 
 ## Vocabulary extension
 
-Lagoon's base vocabulary (~147K words) can be extended at runtime with custom words. This is the primary API for downstream vocabulary learning systems.
+Lagoon's base vocabulary (~150K words) can be extended at runtime with custom words. This is the primary API for downstream vocabulary learning systems.
 
 ### Add a custom word
 
 ```python
-from lagoon._types import WordInfo
+# Compute calibrated weights for each town association
+idf_q = scorer.calc_custom_idf(n_associated_reefs=2)
+reef_weights = [
+    (42, scorer.calc_custom_weight(42, strength=0.9)),
+    (17, scorer.calc_custom_weight(17, strength=0.5)),
+]
 
-# Define reef associations: (reef_id, strength) where strength is 0.0-1.0
 info = scorer.add_custom_word(
     "kubernetes",
-    reef_associations=[(42, 0.9), (17, 0.5)],
+    reef_weights=reef_weights,
+    idf_q=idf_q,
     specificity=2,  # default: highly specific
     tag=1,          # optional: opaque consumer metadata (default 0)
 )
@@ -229,8 +241,9 @@ print(result.coverage)        # 1.0
 The `tag` parameter is opaque metadata that lagoon stores but never interprets. Downstream consumers (e.g., Shoal) can use tags to distinguish base vocabulary words from custom-injected words:
 
 ```python
-info1 = scorer.add_custom_word("kubernetes", reef_associations=[(42, 0.9)], tag=1)
-info2 = scorer.add_custom_word("terraform", reef_associations=[(17, 0.8)], tag=2)
+idf_q = scorer.calc_custom_idf(1)
+info1 = scorer.add_custom_word("kubernetes", reef_weights=[(42, scorer.calc_custom_weight(42, 0.9))], idf_q=idf_q, tag=1)
+info2 = scorer.add_custom_word("terraform", reef_weights=[(17, scorer.calc_custom_weight(17, 0.8))], idf_q=idf_q, tag=2)
 
 result = scorer.score("kubernetes and terraform")
 
@@ -244,28 +257,31 @@ print(base_info.tag)  # 0
 print(scorer.get_word_tags({base_info.word_id}))  # {}
 ```
 
-### Compute BM25 scores without injecting
+### Compute calibrated weights without injecting
 
 ```python
-idf_q, reef_scores = scorer.compute_custom_word_scores(
-    n_associated_reefs=3,
-    associations=[(42, 1.0), (17, 0.6), (103, 0.3)],
-)
-print(idf_q)         # quantized IDF (u8, high value = specific)
-print(reef_scores)   # [(42, bm25_q), (17, bm25_q), (103, bm25_q)]
+# Compute IDF for a word appearing in 3 towns
+idf_q = scorer.calc_custom_idf(n_associated_reefs=3)
+print(idf_q)  # quantized IDF (u8, high value = specific)
+
+# Compute calibrated weight for a specific town
+weight_q = scorer.calc_custom_weight(reef_id=42, strength=0.9)
+print(weight_q)  # u8 weight calibrated to the town's 75th-percentile
 ```
 
 ### Add custom compound words
 
 ```python
 # First add individual words
-info1 = scorer.add_custom_word("zorblax", reef_associations=[(42, 0.8)])
-info2 = scorer.add_custom_word("frimble", reef_associations=[(17, 0.7)])
+idf_q = scorer.calc_custom_idf(1)
+info1 = scorer.add_custom_word("zorblax", reef_weights=[(42, scorer.calc_custom_weight(42, 0.8))], idf_q=idf_q)
+info2 = scorer.add_custom_word("frimble", reef_weights=[(17, scorer.calc_custom_weight(17, 0.7))], idf_q=idf_q)
 
 # Add the compound
 compound_info = scorer.add_custom_word(
     "zorblax frimble",
-    reef_associations=[(42, 0.95), (17, 0.85)],
+    reef_weights=[(42, scorer.calc_custom_weight(42, 0.95)), (17, scorer.calc_custom_weight(17, 0.85))],
+    idf_q=scorer.calc_custom_idf(2),
 )
 
 # Rebuild automaton to match the new compound
@@ -277,12 +293,11 @@ scorer.rebuild_compounds([("zorblax frimble", compound_info.word_id)])
 All inputs are validated with clear `ValueError` messages:
 
 ```python
-scorer.add_custom_word("brain", ...)           # ValueError: already exists
-scorer.add_custom_word("", ...)                # ValueError: must not be empty
-scorer.add_custom_word("x", ..., specificity=5) # ValueError: specificity
-scorer.add_custom_word("x", reef_associations=[]) # ValueError: must not be empty
-scorer.add_custom_word("x", reef_associations=[(999, 0.5)]) # ValueError: reef_id out of range
-scorer.add_custom_word("x", reef_associations=[(42, 2.0)])  # ValueError: strength must be in
+scorer.add_custom_word("brain", ...)             # ValueError: already exists
+scorer.add_custom_word("", ...)                  # ValueError: must not be empty
+scorer.add_custom_word("x", ..., specificity=5)  # ValueError: specificity
+scorer.add_custom_word("x", reef_weights=[])     # ValueError: must not be empty
+scorer.add_custom_word("x", reef_weights=[(999, 100)], idf_q=100) # ValueError: reef_id out of range
 ```
 
 ## Edge cases
@@ -302,21 +317,27 @@ scorer.score("cortex").top_reefs[0].z_score == scorer.score("cortex cortex corte
 
 ## Hierarchy
 
-Lagoon's 283 reefs are organized into a three-level hierarchy:
+Lagoon uses a four-level semantic hierarchy. Three levels actively participate in scoring:
 
-- **5 Archipelagos** — broadest level (medical/physical sciences, physical world/human artifacts, abstract concepts/states, formal systems/qualities, activities/performance/relations)
-- **67 Islands** — mid-level communities (2-8 reefs each)
-- **283 Reefs** — finest-grained semantic clusters (the primary scoring target)
+- **6 Archipelagos** — broadest level, score rollup only
+- **40 Islands** — mid-level communities. The contextual scorer (4+ matched words) tracks island activation and boosts scores when multiple words converge on the same island
+- **298 Towns** — the primary scoring unit. All weight accumulation, background subtraction, and result extraction happen here. Referred to as "reefs" in the API (`top_reefs`, `ScoredReef`, etc.)
+- **3,885 Reefs** — finest-grained clusters nested within towns. Available as metadata via `V3ReefMeta` and through `ScoredReef.resolved_sub_reef_id` for sub-town resolution, but do not have their own scoring pass
 
 Access island and archipelago rollups through the result:
 
 ```python
 result = scorer.score("neuron synapse axon dendrite cortex brain")
 
-# Islands
+# Islands (active in contextual scoring — coherence boosting)
 for island in result.top_islands[:3]:
-    print(f"{island.name}: z={island.aggregate_z:.2f} ({island.n_contributing_reefs} reefs)")
+    print(f"{island.name}: z={island.aggregate_z:.2f} ({island.n_contributing_reefs} towns)")
 
-# Archipelagos (indexed 0-4)
+# Archipelagos (indexed 0-5, rollup only)
 print(result.arch_scores)
+
+# Sub-town reef resolution (not yet wired up in V3 — always None currently)
+# When implemented, will resolve which of the 3,885 reefs within a town best matches
+for reef in result.top_reefs[:3]:
+    print(f"  {reef.name}: sub-reef resolved = {reef.resolved_sub_reef_id}")
 ```

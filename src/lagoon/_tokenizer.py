@@ -20,7 +20,7 @@ _WORD_RE = re.compile(r"[a-z]+")
 class Tokenizer:
     __slots__ = (
         "_word_lookup", "_compound_ac", "_compound_word_ids",
-        "_compound_strings", "_stemmer",
+        "_compound_strings", "_stemmer", "_equivalences",
     )
 
     def __init__(
@@ -29,12 +29,14 @@ class Tokenizer:
         compound_ac: ahocorasick.Automaton,
         compound_word_ids: list[int],
         compound_strings: list[str],
+        equivalences: dict[int, list[int]] | None = None,
     ) -> None:
         self._word_lookup = word_lookup
         self._compound_ac = compound_ac
         self._compound_word_ids = compound_word_ids
         self._compound_strings = compound_strings
         self._stemmer = Stemmer.Stemmer("english")
+        self._equivalences = equivalences or {}
 
     def scan_compounds(
         self, text_lower: str
@@ -46,6 +48,8 @@ class Tokenizer:
         """
         # Collect all matches
         raw_matches: list[tuple[int, int, int]] = []  # (start, end, idx)
+        if not self._compound_strings:
+            return set(), []
         for end_inclusive, idx in self._compound_ac.iter(text_lower):
             end = end_inclusive + 1
             start = end - len(self._compound_strings[idx])
@@ -102,7 +106,12 @@ class Tokenizer:
                     if info is not None:
                         matched.add(info.word_id)
                         continue
-                unknown.append(token)
+                # Equivalence fallback: variant_hash → word_id(s)
+                equiv_wids = self._equivalences.get(h)
+                if equiv_wids is not None:
+                    matched.update(equiv_wids)
+                else:
+                    unknown.append(token)
 
         return matched, unknown
 
@@ -111,6 +120,8 @@ class Tokenizer:
     ) -> list[tuple[int, int, int]]:
         """Compound scan returning (start, end, word_id) triples, sorted by start."""
         raw_matches: list[tuple[int, int, int]] = []
+        if not self._compound_strings:
+            return []
         for end_inclusive, idx in self._compound_ac.iter(text_lower):
             end = end_inclusive + 1
             start = end - len(self._compound_strings[idx])
@@ -186,8 +197,15 @@ class Tokenizer:
                         ordered.append(info.word_id)
                         matched_set.add(info.word_id)
                         continue
-                unknown.append(token)
-                ordered.append(None)
+                # Equivalence fallback: variant_hash → word_id(s)
+                equiv_wids = self._equivalences.get(h)
+                if equiv_wids is not None:
+                    # Use first word_id for ordered position, add all to set
+                    ordered.append(equiv_wids[0])
+                    matched_set.update(equiv_wids)
+                else:
+                    unknown.append(token)
+                    ordered.append(None)
 
         return ordered, matched_set, unknown, total_tokens
 

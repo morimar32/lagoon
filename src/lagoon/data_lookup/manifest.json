@@ -1,0 +1,14 @@
+{
+  "format": "windowsill-lookup",
+  "version": "1.0",
+  "files": {
+    "equivalences.bin": 2200036,
+    "word_tags.bin": 121712,
+    "names.bin": 106626
+  },
+  "counts": {
+    "equivalences": 155538,
+    "word_tags": 3882,
+    "names": 7576
+  }
+}

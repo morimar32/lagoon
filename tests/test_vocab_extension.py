@@ -9,7 +9,7 @@ from lagoon._types import WordInfo
 def test_next_word_id(scorer):
     """next_word_id should return the current length of _word_reefs."""
     initial = scorer.next_word_id
-    assert initial > 146000  # base vocabulary
+    assert initial > 140000  # base vocabulary
 
 
 def test_filter_unknown_known_words(scorer):
@@ -44,9 +44,9 @@ def test_filter_unknown_stemmed_words(scorer):
 
 def test_calc_custom_weight(scorer):
     """calc_custom_weight should return per-reef calibrated weight_q."""
-    w_full = scorer.calc_custom_weight(42, 1.0)
-    w_half = scorer.calc_custom_weight(42, 0.5)
-    w_low = scorer.calc_custom_weight(42, 0.1)
+    w_full = scorer.calc_custom_weight(20, 1.0)
+    w_half = scorer.calc_custom_weight(20, 0.5)
+    w_low = scorer.calc_custom_weight(20, 0.1)
 
     # All in u8 range
     assert 0 <= w_full <= 255
@@ -57,7 +57,7 @@ def test_calc_custom_weight(scorer):
     assert w_full >= w_half >= w_low
 
     # Full strength should be the reef's p75 value
-    assert w_full == scorer._reef_weight_p75[42]
+    assert w_full == scorer._reef_weight_p75[20]
 
 
 def test_calc_custom_weight_validation(scorer):
@@ -69,7 +69,7 @@ def test_calc_custom_weight_validation(scorer):
 def test_calc_custom_idf(scorer):
     """calc_custom_idf should return valid u8 IDF."""
     idf_specific = scorer.calc_custom_idf(3)
-    idf_broad = scorer.calc_custom_idf(100)
+    idf_broad = scorer.calc_custom_idf(30)
 
     assert 0 <= idf_specific <= 255
     assert 0 <= idf_broad <= 255
@@ -90,8 +90,8 @@ def test_add_custom_word(scorer):
 
     idf_q = scorer.calc_custom_idf(2)
     reef_weights = [
-        (42, scorer.calc_custom_weight(42, 0.9)),
-        (17, scorer.calc_custom_weight(17, 0.5)),
+        (20, scorer.calc_custom_weight(20, 0.9)),
+        (15, scorer.calc_custom_weight(15, 0.5)),
     ]
     info = scorer.add_custom_word(
         "qwplzx",
@@ -141,13 +141,13 @@ def test_add_custom_word_duplicate_rejected(scorer):
     """Adding a word that already exists should raise ValueError."""
     # "brain" is in the base vocabulary
     with pytest.raises(ValueError, match="already exists"):
-        scorer.add_custom_word("brain", reef_weights=[(42, 200)], idf_q=100)
+        scorer.add_custom_word("brain", reef_weights=[(20, 200)], idf_q=100)
 
 
 def test_add_custom_word_empty_rejected(scorer):
     """Empty word should raise ValueError."""
     with pytest.raises(ValueError, match="must not be empty"):
-        scorer.add_custom_word("", reef_weights=[(42, 200)], idf_q=100)
+        scorer.add_custom_word("", reef_weights=[(20, 200)], idf_q=100)
 
 
 def test_add_custom_word_bad_specificity(scorer):
@@ -176,7 +176,7 @@ def test_add_custom_word_bad_reef_id(scorer):
 def test_add_custom_word_bad_weight_q(scorer):
     """Out-of-range weight_q should raise ValueError."""
     with pytest.raises(ValueError, match="weight_q must be in"):
-        scorer.add_custom_word("testwordabc", reef_weights=[(42, 70000)], idf_q=100)
+        scorer.add_custom_word("testwordabc", reef_weights=[(20, 70000)], idf_q=100)
 
 
 def test_rebuild_compounds(scorer):
@@ -184,11 +184,11 @@ def test_rebuild_compounds(scorer):
     idf1 = scorer.calc_custom_idf(1)
     # Add the individual words first
     info1 = scorer.add_custom_word(
-        "zorblax", reef_weights=[(42, scorer.calc_custom_weight(42, 0.8))],
+        "zorblax", reef_weights=[(20, scorer.calc_custom_weight(20, 0.8))],
         idf_q=idf1,
     )
     info2 = scorer.add_custom_word(
-        "frimble", reef_weights=[(17, scorer.calc_custom_weight(17, 0.7))],
+        "frimble", reef_weights=[(15, scorer.calc_custom_weight(15, 0.7))],
         idf_q=idf1,
     )
 
@@ -198,8 +198,8 @@ def test_rebuild_compounds(scorer):
     compound_info = scorer.add_custom_word(
         compound_word,
         reef_weights=[
-            (42, scorer.calc_custom_weight(42, 0.95)),
-            (17, scorer.calc_custom_weight(17, 0.85)),
+            (20, scorer.calc_custom_weight(20, 0.95)),
+            (15, scorer.calc_custom_weight(15, 0.85)),
         ],
         idf_q=idf2,
     )
@@ -251,7 +251,7 @@ def test_tag_roundtrip_add_custom_word(scorer):
     """Tag should round-trip through add_custom_word()."""
     info = scorer.add_custom_word(
         "tagword_rt",
-        reef_weights=[(42, scorer.calc_custom_weight(42, 0.8))],
+        reef_weights=[(20, scorer.calc_custom_weight(20, 0.8))],
         idf_q=scorer.calc_custom_idf(1),
         tag=7,
     )
@@ -276,13 +276,13 @@ def test_get_word_tags_returns_nonzero(scorer):
     idf1 = scorer.calc_custom_idf(1)
     info_tagged = scorer.add_custom_word(
         "tagword_nz1",
-        reef_weights=[(42, scorer.calc_custom_weight(42, 0.8))],
+        reef_weights=[(20, scorer.calc_custom_weight(20, 0.8))],
         idf_q=idf1,
         tag=5,
     )
     info_untagged = scorer.add_custom_word(
         "tagword_nz2",
-        reef_weights=[(17, scorer.calc_custom_weight(17, 0.7))],
+        reef_weights=[(15, scorer.calc_custom_weight(15, 0.7))],
         idf_q=idf1,
         tag=0,
     )
@@ -310,8 +310,8 @@ def test_tag_does_not_affect_scoring(scorer):
     """Scoring results should be identical regardless of tag value."""
     idf_q = scorer.calc_custom_idf(2)
     rw = [
-        (42, scorer.calc_custom_weight(42, 0.9)),
-        (17, scorer.calc_custom_weight(17, 0.5)),
+        (20, scorer.calc_custom_weight(20, 0.9)),
+        (15, scorer.calc_custom_weight(15, 0.5)),
     ]
     info_no_tag = scorer.add_custom_word(
         "tagword_sc1",
@@ -332,5 +332,5 @@ def test_tag_does_not_affect_scoring(scorer):
     # Same associations → same scoring behavior
     assert result_no_tag.matched_words == result_with_tag.matched_words
     assert result_no_tag.coverage == result_with_tag.coverage
-    for r1, r2 in zip(result_no_tag.top_reefs, result_with_tag.top_reefs):
+    for r1, r2 in zip(result_no_tag.top_towns, result_with_tag.top_towns):
         assert r1.z_score == pytest.approx(r2.z_score)

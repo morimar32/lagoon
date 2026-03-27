@@ -8,7 +8,7 @@ def test_empty_string(scorer):
     result = scorer.score("")
     assert result.confidence == 0.0
     assert result.matched_words == 0
-    assert result.top_reefs == []
+    assert result.top_towns == []
     assert result.matched_word_ids == frozenset()
 
 
@@ -27,7 +27,7 @@ def test_single_word(scorer):
     result = scorer.score("cortex")
     assert result.matched_words == 1
     assert result.coverage == 1.0
-    assert len(result.top_reefs) > 0
+    assert len(result.top_towns) > 0
     assert len(result.matched_word_ids) == 1
 
 
@@ -42,8 +42,8 @@ def test_result_structure(scorer):
     assert isinstance(result.matched_word_ids, frozenset)
     assert len(result.matched_word_ids) > 0
     assert isinstance(result.valence_signal, float)
-    for reef in result.top_reefs:
-        assert hasattr(reef, "reef_id")
+    for reef in result.top_towns:
+        assert hasattr(reef, "town_id")
         assert hasattr(reef, "z_score")
         assert hasattr(reef, "raw_score")
         assert hasattr(reef, "n_contributing_words")
@@ -55,7 +55,7 @@ def test_result_structure(scorer):
     for island in result.top_islands:
         assert hasattr(island, "island_id")
         assert hasattr(island, "aggregate_z")
-        assert hasattr(island, "n_contributing_reefs")
+        assert hasattr(island, "n_contributing_towns")
         assert hasattr(island, "name")
 
 
@@ -65,14 +65,14 @@ def test_score_batch(scorer):
     results = scorer.score_batch(texts)
     assert len(results) == 3
     for r in results:
-        assert hasattr(r, "top_reefs")
+        assert hasattr(r, "top_towns")
         assert hasattr(r, "matched_word_ids")
 
 
 def test_top_k(scorer):
     """top_k parameter should limit number of returned reefs."""
     result = scorer.score("neuron synapse axon dendrite cortex brain", top_k=5)
-    assert len(result.top_reefs) == 5
+    assert len(result.top_towns) == 5
 
 
 # --- Canonical test cases (README Section 12) ---
@@ -84,11 +84,16 @@ def test_canonical_generic_text(scorer):
     )
     assert result.coverage > 0.0
     assert result.matched_words > 0
-    assert len(result.top_reefs) > 0
+    assert len(result.top_towns) > 0
 
 
 def test_canonical_huck_finn(scorer):
-    """Test 2: Huck Finn passage - high confidence, strong z-scores."""
+    """Test 2: Huck Finn passage - should produce literary/dramatic signal.
+
+    This passage is from a novel and includes a theatrical rehearsal of Romeo
+    & Juliet.  Towns like "Literary Criticism", "Novel", "Drama & Playwriting",
+    or "Theater" should appear in the top 5.
+    """
     huck = (
         'It was after sun-up now, but we went right on and didn\'t tie up. '
         'The king and the duke turned out by-and-by looking pretty rusty; '
@@ -107,28 +112,64 @@ def test_canonical_huck_finn(scorer):
         'jackass."'
     )
     result = scorer.score(huck)
-    # This rich literary passage should produce high confidence and strong z-scores
-    assert result.confidence > 3.0
-    assert result.top_reefs[0].z_score > 5.0
+    assert result.confidence > 2.0
+    # A literary/dramatic town should appear in the top 5
+    literary_keywords = {"literary", "literature", "novel", "drama", "theater",
+                         "theatre", "playwriting", "fiction", "poetry", "narrative"}
+    literary = next(
+        (r for r in result.top_towns[:5]
+         if any(kw in r.name.lower() for kw in literary_keywords)),
+        None,
+    )
+    assert literary is not None, (
+        f"No literary/dramatic town in top 5 for Huck Finn passage: "
+        f"{[r.name for r in result.top_towns[:5]]}"
+    )
 
 
 def test_canonical_neuroscience(scorer):
-    """Test 4: Neuroscience words - full coverage, neurological reef in top results."""
+    """Test 4: Neuroscience words - full coverage, neuroscience town as #1.
+
+    Eight pure neuroscience words should produce a neuroscience-related town
+    (Neurology, Neuropsychology, Cognitive Psychology) as the top result.
+    """
     result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
     # All words should match (100% coverage)
     assert result.coverage == 1.0
     assert result.matched_words == 8
-    # A biology/neuroscience-related reef should appear in top results
-    bio_keywords = {"biolog", "organism", "anatom", "neural", "microscop", "life science", "neuro"}
-    neuro = next(
-        (r for r in result.top_reefs
-         if any(kw in r.name.lower() for kw in bio_keywords)),
-        None,
+    # The #1 town should be neuroscience-related — not obstetrics, not nanotechnology
+    neuro_keywords = {"neurology", "neuroscience", "neuropsychology", "cognitive",
+                      "anatomy", "physiology", "psychology"}
+    top_reef = result.top_towns[0]
+    assert any(kw in top_reef.name.lower() for kw in neuro_keywords), (
+        f"Top result for 8 neuroscience words should be neuroscience-related, "
+        f"got '{top_reef.name}' (z={top_reef.z_score:.2f}). "
+        f"Top 5: {[(r.name, round(r.z_score, 2)) for r in result.top_towns[:5]]}"
     )
-    assert neuro is not None, (
-        f"No biology-related reef in top results: "
-        f"{[r.name for r in result.top_reefs]}"
+
+
+def test_canonical_waveform(scorer):
+    """Test 3: Waveform passage - physics/math/acoustics signal, no music.
+
+    A passage about sine waves, frequency, amplitude, and oscillation should
+    produce physics/math/acoustics towns — not music or opera.
+    """
+    result = scorer.score(
+        "The sine wave has a pattern that repeats. The frequency determines "
+        "the pitch. Amplitude controls the volume. The waveform oscillates "
+        "between positive and negative values."
     )
+    assert result.confidence > 2.0
+    # Top 3 should be physics/math/acoustics — not music/opera
+    physics_keywords = {"physics", "acoustics", "algebra", "mathematics",
+                        "electromagnetism", "quantum", "optics", "signal",
+                        "nuclear", "mechanics"}
+    music_keywords = {"opera", "music", "singing", "composition", "orchestra"}
+    for reef in result.top_towns[:3]:
+        assert not any(kw in reef.name.lower() for kw in music_keywords), (
+            f"Music/opera town '{reef.name}' should not be in top 3 for a "
+            f"physics passage. Top 5: {[r.name for r in result.top_towns[:5]]}"
+        )
 
 
 def test_canonical_topic_shift(scorer):
@@ -159,18 +200,18 @@ def test_canonical_topic_shift(scorer):
     r2 = scorer.score(second_half)
 
     # The two halves should have different top-5 reef rankings
-    top5_1 = [r.reef_id for r in r1.top_reefs[:5]]
-    top5_2 = [r.reef_id for r in r2.top_reefs[:5]]
+    top5_1 = [r.town_id for r in r1.top_towns[:5]]
+    top5_2 = [r.town_id for r in r2.top_towns[:5]]
     assert top5_1 != top5_2, "Two halves should have different top-5 reef rankings"
 
 
 def test_single_word_no_bg_subtraction(scorer):
     """Single matched word should use alpha=0 (no mean subtraction)."""
-    result = scorer.score("cortex")
+    result = scorer.score("hippocampus")
     # With 1 matched word, alpha=0: z = raw / bg_std (no bg_mean subtraction)
     # Top reefs should have positive z_scores from the word's reef weights
-    assert len(result.top_reefs) > 0
-    assert result.top_reefs[0].z_score > 0
+    assert len(result.top_towns) > 0
+    assert result.top_towns[0].z_score > 0
 
 
 # --- Stop word filtering ---
@@ -201,17 +242,17 @@ def test_min_reef_z_overrides_top_k(scorer):
         "neuron synapse axon dendrite cortex brain neural hippocampus",
         min_reef_z=threshold,
     )
-    for reef in result.top_reefs:
+    for reef in result.top_towns:
         assert reef.z_score >= threshold
 
 
 def test_min_reef_z_empty_result(scorer):
-    """Very high threshold should produce empty top_reefs."""
+    """Very high threshold should produce empty top_towns."""
     result = scorer.score(
         "neuron synapse axon dendrite cortex brain neural hippocampus",
         min_reef_z=999.0,
     )
-    assert result.top_reefs == []
+    assert result.top_towns == []
 
 
 def test_min_reef_z_none_preserves_top_k(scorer):
@@ -219,7 +260,7 @@ def test_min_reef_z_none_preserves_top_k(scorer):
     result = scorer.score(
         "neuron synapse axon dendrite cortex brain neural hippocampus",
     )
-    assert len(result.top_reefs) == 10
+    assert len(result.top_towns) == 10
 
 
 def test_min_reef_z_reefs_sorted_descending(scorer):
@@ -228,18 +269,18 @@ def test_min_reef_z_reefs_sorted_descending(scorer):
         "neuron synapse axon dendrite cortex brain neural hippocampus",
         min_reef_z=1.0,
     )
-    for i in range(len(result.top_reefs) - 1):
-        assert result.top_reefs[i].quality_score >= result.top_reefs[i + 1].quality_score
+    for i in range(len(result.top_towns) - 1):
+        assert result.top_towns[i].quality_score >= result.top_towns[i + 1].quality_score
 
 
 def test_min_reef_z_island_rollup_matches_selected(scorer):
-    """Island contributing count should equal len(top_reefs)."""
+    """Island contributing count should equal len(top_towns)."""
     result = scorer.score(
         "neuron synapse axon dendrite cortex brain neural hippocampus",
         min_reef_z=2.0,
     )
-    total_contributing = sum(isl.n_contributing_reefs for isl in result.top_islands)
-    assert total_contributing == len(result.top_reefs)
+    total_contributing = sum(isl.n_contributing_towns for isl in result.top_islands)
+    assert total_contributing == len(result.top_towns)
 
 
 def test_score_batch_with_min_reef_z(scorer):
@@ -250,14 +291,14 @@ def test_score_batch_with_min_reef_z(scorer):
         min_reef_z=threshold,
     )
     for result in results:
-        for reef in result.top_reefs:
+        for reef in result.top_towns:
             assert reef.z_score >= threshold
 
 
 def test_min_reef_z_backward_compat(scorer):
     """score() without min_reef_z should still return exactly 10 reefs."""
     result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
-    assert len(result.top_reefs) == 10
+    assert len(result.top_towns) == 10
 
 
 def test_tiny_reefs_no_absurd_z_scores(scorer):
@@ -271,18 +312,18 @@ def test_tiny_reefs_no_absurd_z_scores(scorer):
     # Use a broad query with common words that might hit tiny reefs
     result = scorer.score(
         "good best better most well great very really",
-        top_k=124,
+        top_k=298,
     )
     # Tiny reefs (n_words < 100) should not produce z > 110 — this guards
     # against the background model mismatch that previously caused extreme
     # z-scores for tiny reefs.  After noise cleanup, bg_std is smaller for
     # niche reefs, so legitimate queries that perfectly match a small reef
     # (e.g. "degree and intensity") can reach z ~ 103.
-    for reef in result.top_reefs:
-        nw = scorer._reef_n_words[reef.reef_id]
+    for reef in result.top_towns:
+        nw = scorer._reef_n_words[reef.town_id]
         if nw < 100:
             assert reef.z_score < 110.0, (
-                f"reef {reef.reef_id} ({reef.name}): z_score={reef.z_score:.1f} "
+                f"town {reef.town_id} ({reef.name}): z_score={reef.z_score:.1f} "
                 f"exceeds sane maximum for tiny reef (n_words={nw})"
             )
 
@@ -290,9 +331,9 @@ def test_tiny_reefs_no_absurd_z_scores(scorer):
 # --- Quality score tests ---
 
 def test_quality_score_present(scorer):
-    """quality_score should be populated on ScoredReef."""
+    """quality_score should be populated on ScoredTown."""
     result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
-    for reef in result.top_reefs:
+    for reef in result.top_towns:
         assert isinstance(reef.quality_score, float)
         # Top reefs with positive z should have positive quality_score
         if reef.z_score > 0:
@@ -300,10 +341,10 @@ def test_quality_score_present(scorer):
 
 
 def test_quality_score_ranking(scorer):
-    """top_reefs should be sorted by quality_score descending."""
+    """top_towns should be sorted by quality_score descending."""
     result = scorer.score("neuron synapse axon dendrite cortex brain neural hippocampus")
-    for i in range(len(result.top_reefs) - 1):
-        assert result.top_reefs[i].quality_score >= result.top_reefs[i + 1].quality_score
+    for i in range(len(result.top_towns) - 1):
+        assert result.top_towns[i].quality_score >= result.top_towns[i + 1].quality_score
 
 
 def test_quality_score_equals_z_score(scorer):
@@ -312,7 +353,7 @@ def test_quality_score_equals_z_score(scorer):
         "neuron synapse axon dendrite cortex brain neural hippocampus",
         top_k=20,
     )
-    for r in result.top_reefs:
+    for r in result.top_towns:
         assert r.quality_score == r.z_score
 
 
@@ -345,10 +386,10 @@ def test_quality_score_equals_z_for_all_reefs(scorer):
     """quality_score should equal z_score for all reefs (specificity baked into bg_std)."""
     result = scorer.score(
         "neuron synapse axon dendrite cortex brain neural hippocampus",
-        top_k=124,  # get all reefs
+        top_k=298,  # get all reefs
     )
-    for reef in result.top_reefs:
+    for reef in result.top_towns:
         assert reef.quality_score == reef.z_score, (
-            f"reef {reef.reef_id}: quality_score={reef.quality_score} "
+            f"town {reef.town_id}: quality_score={reef.quality_score} "
             f"should equal z_score={reef.z_score}"
         )

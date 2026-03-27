@@ -6,27 +6,32 @@ import hashlib
 import json
 from importlib import resources
 from pathlib import Path
+from statistics import mean
 from typing import Any
 
 import ahocorasick
 import msgpack
 
 from ._errors import LagoonChecksumError, LagoonError, LagoonVersionError
-from ._types import IslandMeta, ReefMeta, SubReefMeta, WordInfo
+from ._types import IslandMeta, LookupData, ReefMeta, SubReefMeta, TownMeta, V3ReefMeta, WordInfo
 
-_EXPECTED_VERSION = "7.0"
+_EXPECTED_VERSION_PREFIX = "3.1"
 
-_DATA_FILES = (
+_REQUIRED_FILES = (
     "word_lookup.bin",
-    "word_reefs.bin",
-    "reef_meta.bin",
+    "word_islands.bin",
+    "word_towns.bin",
     "island_meta.bin",
     "background.bin",
-    "compounds.bin",
     "constants.bin",
-    "reef_edges.bin",
-    "word_reef_detail.bin",
-    "sub_reef_meta.bin",
+    "compounds.bin",
+    "word_detail.bin",
+    "town_meta.bin",
+)
+
+_OPTIONAL_FILES = (
+    "reef_meta.bin",
+    "bucket_words.bin",
 )
 
 
@@ -51,13 +56,14 @@ def _read_manifest(data_dir: Path) -> dict[str, Any]:
 
 
 def _validate_manifest(manifest: dict[str, Any], data_dir: Path) -> None:
-    version = manifest.get("version")
-    if version != _EXPECTED_VERSION:
+    version = manifest.get("version", "")
+    if not version.startswith(_EXPECTED_VERSION_PREFIX):
         raise LagoonVersionError(
-            f"Expected data version {_EXPECTED_VERSION!r}, got {version!r}"
+            f"Expected data version starting with {_EXPECTED_VERSION_PREFIX!r}, "
+            f"got {version!r}"
         )
     checksums = manifest.get("files", {})
-    for filename in _DATA_FILES:
+    for filename in _REQUIRED_FILES:
         filepath = data_dir / filename
         if not filepath.exists():
             raise LagoonError(f"Missing data file: {filepath}")
@@ -70,6 +76,18 @@ def _validate_manifest(manifest: dict[str, Any], data_dir: Path) -> None:
                 f"Checksum mismatch for {filename}: "
                 f"expected {expected[:16]}..., got {actual[:16]}..."
             )
+    # Validate optional files if present
+    for filename in _OPTIONAL_FILES:
+        filepath = data_dir / filename
+        if filepath.exists():
+            expected = checksums.get(filename)
+            if expected is not None:
+                actual = _sha256(filepath)
+                if actual != expected:
+                    raise LagoonChecksumError(
+                        f"Checksum mismatch for {filename}: "
+                        f"expected {expected[:16]}..., got {actual[:16]}..."
+                    )
 
 
 def _load_msgpack(path: Path, **kwargs: Any) -> Any:
@@ -98,45 +116,47 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
             specificity=val[2], idf_q=val[3],
         )
 
-    # word_reefs: list[list[tuple[int,int,int]]]  (reef_id, weight_q, sub_reef_id)
-    raw_reefs = _load_msgpack(data_dir / "word_reefs.bin")
+    # word_reefs: list[list[tuple[int,int,int]]]  (town_id, weight_q, sentinel)
+    # v3.1 word_towns.bin has 2-element entries [town_id, weight]; pad to 3-element
+    # with sentinel sub_reef_id for compat with _accumulate_weights, add_custom_word, etc.
+    raw_towns = _load_msgpack(data_dir / "word_towns.bin")
     word_reefs: list[list[tuple[int, int, int]]] = [
-        [tuple(entry) for entry in word_entries]  # type: ignore[misc]
-        for word_entries in raw_reefs
+        [(e[0], e[1], 0xFFFF) for e in entries]
+        for entries in raw_towns
     ]
 
-    # reef_meta: list[ReefMeta]
-    # v6 hierarchy_addr: arch(16)|island(16), island_id = reef_id (1:1)
-    raw_reef_meta = _load_msgpack(data_dir / "reef_meta.bin")
-    reef_meta: list[ReefMeta] = []
-    for i, rm in enumerate(raw_reef_meta):
-        addr = rm["hierarchy_addr"]
-        reef_meta.append(ReefMeta(
-            reef_id=i,
-            hierarchy_addr=addr,
-            n_words=rm["n_words"],
-            name=rm["name"],
-            island_id=addr & 0xFFFF,
-            arch_id=(addr >> 16) & 0xFFFF,
-            valence=rm.get("valence", 0.0),
-            avg_specificity=rm.get("avg_specificity", 0.0),
-            noun_frac=rm.get("noun_frac", 0.0),
-            verb_frac=rm.get("verb_frac", 0.0),
-            adj_frac=rm.get("adj_frac", 0.0),
-            adv_frac=rm.get("adv_frac", 0.0),
-        ))
-
-    # island_meta: list[IslandMeta]
+    # island_meta.bin → island_meta (40 islands for rollup)
     raw_island_meta = _load_msgpack(data_dir / "island_meta.bin")
     island_meta: list[IslandMeta] = [
         IslandMeta(island_id=i, arch_id=im["arch_id"], name=im["name"])
         for i, im in enumerate(raw_island_meta)
     ]
 
-    # background: bg_mean, bg_std
+    # Build arch_id lookup from island_meta
+    arch_for_island = [im["arch_id"] for im in raw_island_meta]
+
+    # reef_meta: 298 towns become the scoring reefs
+    raw_town_meta = _load_msgpack(data_dir / "town_meta.bin")
+    reef_meta: list[ReefMeta] = []
+    for i, tm in enumerate(raw_town_meta):
+        island_id = tm["island_id"]
+        arch_id = arch_for_island[island_id]
+        reef_meta.append(ReefMeta(
+            reef_id=i,
+            hierarchy_addr=(arch_id << 16) | i,
+            n_words=tm["n_words"],
+            name=tm["name"],
+            island_id=island_id,
+            arch_id=arch_id,
+            valence=0.0,
+            avg_specificity=tm.get("avg_specificity", 0.0),
+            noun_frac=0.0, verb_frac=0.0, adj_frac=0.0, adv_frac=0.0,
+        ))
+
+    # background: town-level bg_mean, bg_std (298 entries)
     bg = _load_msgpack(data_dir / "background.bin")
-    bg_mean: list[float] = bg["bg_mean"]
-    bg_std: list[float] = bg["bg_std"]
+    bg_mean: list[float] = bg["town_bg_mean"]
+    bg_std: list[float] = bg["town_bg_std"]
 
     # compounds: build Aho-Corasick automaton
     raw_compounds = _load_msgpack(data_dir / "compounds.bin")
@@ -147,38 +167,78 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
         ac.add_word(compound_str, idx)
         compound_word_ids.append(word_id)
         compound_strings.append(compound_str)
-    ac.make_automaton()
+    if raw_compounds:
+        ac.make_automaton()
 
-    # constants
+    # constants — synthesize v7-compat keys using town-level data
     constants = _load_msgpack(data_dir / "constants.bin")
+    town_n_words = constants["town_n_words"]
+    constants["reef_n_words"] = town_n_words
+    constants["reef_total_dims"] = [0] * len(town_n_words)
+    constants["avg_reef_words"] = mean(town_n_words) if town_n_words else 0
+    # IQF placeholder per town (no IQF column yet)
+    constants["reef_iqf"] = [tm.get("tqf", 128) for tm in raw_town_meta]
 
-    # domainless word_ids (words recognized but not domain-specific)
-    domainless_word_ids = frozenset(constants.get("domainless_word_ids", []))
+    # domainless word_ids — town-level (words not in any town, larger set)
+    domainless_word_ids = frozenset(constants.get("town_domainless_word_ids", []))
 
-    # reef_edges: list of [src, tgt, weight] triplets
-    raw_edges = _load_msgpack(data_dir / "reef_edges.bin")
-    reef_edges: list[tuple[int, int, float]] = [
-        (e[0], e[1], e[2]) for e in raw_edges
-    ]
+    # bucket_only_word_ids
+    bucket_only_word_ids = frozenset(constants.get("bucket_only_word_ids", []))
 
-    # word_reef_detail: list[list[tuple[int,int,int]]] (island_id, sub_reef_id, weight_q)
-    raw_detail = _load_msgpack(data_dir / "word_reef_detail.bin")
-    word_reef_detail: list[list[tuple[int, int, int]]] = [
-        [tuple(e) for e in entries]  # type: ignore[misc]
+    # reef_edges: empty in v3
+    reef_edges: list[tuple[int, int, float]] = []
+
+    # word_reef_detail: v3 word_detail.bin has 5-element entries
+    # (island_id, town_id, reef_id, weight, level)
+    raw_detail = _load_msgpack(data_dir / "word_detail.bin")
+    word_reef_detail: list[list[tuple]] = [
+        [tuple(e) for e in entries]
         for entries in raw_detail
     ]
 
-    # sub_reef_meta: list[SubReefMeta]
-    raw_sub = _load_msgpack(data_dir / "sub_reef_meta.bin")
-    sub_reef_meta: list[SubReefMeta] = [
-        SubReefMeta(
-            sub_reef_id=i,
-            parent_island_id=sm["parent_island_id"],
-            n_words=sm["n_words"],
-            name=sm["name"],
+    # sub_reef_meta: empty — towns ARE the reefs now, no deeper resolution
+    sub_reef_meta: list[SubReefMeta] = []
+
+    # town_meta: full TownMeta objects (same data used for reef_meta above)
+    town_meta: list[TownMeta] = [
+        TownMeta(
+            town_id=i,
+            island_id=tm["island_id"],
+            name=tm["name"],
+            n_words=tm["n_words"],
+            tqf=tm.get("tqf", 128),
+            avg_specificity=tm.get("avg_specificity", 0.0),
         )
-        for i, sm in enumerate(raw_sub)
+        for i, tm in enumerate(raw_town_meta)
     ]
+
+    # v3_reef_meta: full V3ReefMeta objects from reef_meta.bin (optional)
+    reef_meta_path = data_dir / "reef_meta.bin"
+    if reef_meta_path.exists():
+        raw_reef_meta_v3 = _load_msgpack(reef_meta_path)
+        v3_reef_meta: list[V3ReefMeta] = [
+            V3ReefMeta(
+                reef_id=i,
+                town_id=rm["town_id"],
+                name=rm.get("name", ""),
+                n_words=rm["n_words"],
+                avg_specificity=rm.get("avg_specificity", 0.0),
+            )
+            for i, rm in enumerate(raw_reef_meta_v3)
+        ]
+    else:
+        v3_reef_meta = []
+
+    # bucket_words: sparse list indexed by word_id (optional)
+    bucket_path = data_dir / "bucket_words.bin"
+    if bucket_path.exists():
+        raw_bucket = _load_msgpack(bucket_path)
+        bucket_words: list[list[tuple[int, int]]] = [
+            [tuple(e) for e in entries]  # type: ignore[misc]
+            for entries in raw_bucket
+        ]
+    else:
+        bucket_words = []
 
     return {
         "word_lookup": word_lookup,
@@ -195,4 +255,67 @@ def load_data(data_dir: Path | str | None = None) -> dict[str, Any]:
         "word_reef_detail": word_reef_detail,
         "sub_reef_meta": sub_reef_meta,
         "domainless_word_ids": domainless_word_ids,
+        "town_meta": town_meta,
+        "v3_reef_meta": v3_reef_meta,
+        "bucket_words": bucket_words,
+        "bucket_only_word_ids": bucket_only_word_ids,
     }
+
+
+_MASK64 = 0xFFFFFFFFFFFFFFFF
+
+
+def _i64_to_u64(signed: int) -> int:
+    """Convert a signed i64 (from SQLite) to unsigned u64 (Lagoon hash space)."""
+    if signed < 0:
+        return signed + (1 << 64)
+    return signed
+
+
+def _default_lookup_dir() -> Path:
+    return Path(str(resources.files("lagoon") / "data_lookup"))
+
+
+def load_lookup(data_dir: Path | str | None = None) -> LookupData:
+    """Load optional lookup reference data (equivalences, word tags, names).
+
+    Returns a LookupData with empty collections if the directory or any
+    individual file is missing. Never raises on absent data.
+    """
+    if data_dir is None:
+        data_dir = _default_lookup_dir()
+    else:
+        data_dir = Path(data_dir)
+
+    if not data_dir.exists():
+        return LookupData(equivalences={}, word_tags={}, names=frozenset())
+
+    # Equivalences: sorted [variant_hash_i64, word_id] pairs → dict[u64, list[int]]
+    equiv_path = data_dir / "equivalences.bin"
+    equivalences: dict[int, list[int]] = {}
+    if equiv_path.exists():
+        raw_equiv = _load_msgpack(equiv_path)
+        for pair in raw_equiv:
+            h_u64 = _i64_to_u64(pair[0])
+            wid = pair[1]
+            if h_u64 in equivalences:
+                equivalences[h_u64].append(wid)
+            else:
+                equivalences[h_u64] = [wid]
+
+    # Word tags: {word: [[tag_type, tag_value], ...]}
+    tags_path = data_dir / "word_tags.bin"
+    if tags_path.exists():
+        word_tags = _load_msgpack(tags_path)
+    else:
+        word_tags = {}
+
+    # Names: [[name, type], ...] → frozenset of lowercased names
+    names_path = data_dir / "names.bin"
+    if names_path.exists():
+        raw_names = _load_msgpack(names_path)
+        names = frozenset(entry[0].lower() for entry in raw_names)
+    else:
+        names = frozenset()
+
+    return LookupData(equivalences=equivalences, word_tags=word_tags, names=names)

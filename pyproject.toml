@@ -12,6 +12,7 @@ dependencies = [
     "msgpack>=1.0",
     "pyahocorasick>=2.0",
     "PyStemmer>=2.0",
+    "yake",
 ]
 
 [project.optional-dependencies]

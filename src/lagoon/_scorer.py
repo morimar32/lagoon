@@ -14,9 +14,11 @@ from ._types import (
     DocumentAnalysis,
     ScoredIsland,
     ScoredReef,
+    ScoredTown,
     SubReefMeta,
     TextResult,
     TopicResult,
+    V3ReefMeta,
     WordInfo,
 )
 
@@ -45,7 +47,9 @@ class ReefScorer:
         "_bg_mean", "_bg_std", "_tokenizer", "_n_reefs", "_n_archs",
         "_reef_total_dims", "_reef_n_words", "_avg_reef_words",
         "_reef_edges", "_word_tags", "_weight_scale", "_reef_weight_p75",
-        "_word_reef_detail", "_sub_reef_meta", "_domainless_word_ids",
+        "_word_reef_detail", "_sub_reef_meta", "_v3_reef_meta",
+        "_domainless_word_ids",
+        "_idf_scale", "_reef_iqf", "_town_tqf",
     )
 
     def __init__(
@@ -63,7 +67,9 @@ class ReefScorer:
         reef_edges: list[tuple[int, int, float]] | None = None,
         word_reef_detail: list[list[tuple[int, int, int]]] | None = None,
         sub_reef_meta: list[SubReefMeta] | None = None,
+        v3_reef_meta: list[V3ReefMeta] | None = None,
         domainless_word_ids: frozenset[int] | None = None,
+        equivalences: dict[int, list[int]] | None = None,
     ) -> None:
         self._word_lookup = word_lookup
         self._word_reefs = word_reefs
@@ -80,29 +86,34 @@ class ReefScorer:
         self._reef_edges = reef_edges if reef_edges else []
         self._word_reef_detail = word_reef_detail if word_reef_detail else []
         self._sub_reef_meta = sub_reef_meta if sub_reef_meta else []
+        self._v3_reef_meta = v3_reef_meta if v3_reef_meta else []
         self._domainless_word_ids = domainless_word_ids or frozenset()
         self._word_tags: dict[int, int] = {}
         self._reef_weight_p75 = self._compute_reef_weight_percentiles(word_reefs)
+        self._idf_scale = float(constants.get("IDF_SCALE", 51))
+        self._reef_iqf = constants.get("reef_iqf", [128] * self._n_reefs)
+        self._town_tqf: list[int] = []
 
         self._tokenizer = Tokenizer(
             word_lookup, compound_ac, compound_word_ids, compound_strings,
+            equivalences=equivalences,
         )
 
     # -- Public properties --
 
     @property
-    def reef_word_counts(self) -> list[int]:
-        """Number of words per reef (read-only)."""
+    def town_word_counts(self) -> list[int]:
+        """Number of words per town (read-only)."""
         return self._reef_n_words
 
     @property
-    def avg_reef_words(self) -> float:
-        """Average words per reef (read-only)."""
+    def avg_town_words(self) -> float:
+        """Average words per town (read-only)."""
         return self._avg_reef_words
 
     @property
-    def n_reefs(self) -> int:
-        """Total number of reefs (read-only)."""
+    def n_towns(self) -> int:
+        """Total number of towns (read-only)."""
         return self._n_reefs
 
     # -- Public scoring API --
@@ -299,7 +310,7 @@ class ReefScorer:
     def calc_custom_idf(self, n_associated_reefs: int) -> int:
         """Compute quantized IDF (u8) for a custom word.
 
-        Uses lagoon's IDF formula: ln((N - n + 0.5) / (n + 0.5) + 1) * 51.
+        Uses lagoon's IDF formula: ln((N - n + 0.5) / (n + 0.5) + 1) * IDF_SCALE.
         """
         n_total = self._n_reefs
         if n_associated_reefs < 1:
@@ -314,7 +325,7 @@ class ReefScorer:
             / (n_associated_reefs + 0.5)
             + 1
         )
-        return max(0, min(255, round(idf * 51)))
+        return max(0, min(255, round(idf * self._idf_scale)))
 
     def add_custom_word(
         self,
@@ -474,8 +485,9 @@ class ReefScorer:
             filtered = [w for w in unknown if w not in STOP_WORDS]
             total = len(unknown)
             tr = TopicResult(
-                top_reefs=[],
+                top_towns=[],
                 top_islands=[],
+                top_reefs=[],
                 arch_scores=[0.0] * self._n_archs,
                 confidence=0.0,
                 coverage=0.0 if total == 0 else 0.0,
@@ -518,8 +530,9 @@ class ReefScorer:
             total_words = len(unknown)
             filtered = [w for w in unknown if w not in STOP_WORDS]
             return TopicResult(
-                top_reefs=[],
+                top_towns=[],
                 top_islands=[],
+                top_reefs=[],
                 arch_scores=[0.0] * self._n_archs,
                 confidence=0.0,
                 coverage=0.0 if total_words == 0 else 0.0,
@@ -750,34 +763,36 @@ class ReefScorer:
             z_scores[i] = (raw_scores[i] - alpha * bg_mean[i]) / std
         return z_scores
 
-    def _resolve_sub_reefs(
-        self, top_reef_ids: list[int], matched_word_ids: set[int],
-    ) -> dict[int, int | None]:
-        """For each top island, resolve which gen-2 sub-reef best matches."""
-        if not self._sub_reef_meta:
+    def _resolve_reefs(
+        self, top_town_ids: list[int], matched_word_ids: set[int],
+    ) -> dict[int, dict[int, float]]:
+        """For each top town, resolve reef vote scores from matched words.
+
+        Uses word_detail entries at level 0 (reef-level) to vote on which
+        Leiden-clustered reef within each town best matches the text.
+
+        Returns:
+            {town_id: {reef_id: vote_score}} for towns with reef-level hits.
+        """
+        word_reef_detail = self._word_reef_detail
+        if not word_reef_detail or not self._v3_reef_meta:
             return {}
 
-        results: dict[int, int | None] = {}
-        word_reefs = self._word_reefs
-        word_reef_detail = self._word_reef_detail
+        top_town_set = set(top_town_ids)
+        results: dict[int, dict[int, float]] = {}
 
-        for island_id in top_reef_ids:
-            votes: dict[int, float] = defaultdict(float)
-            for word_id in matched_word_ids:
-                if word_id >= len(word_reefs):
+        for word_id in matched_word_ids:
+            if word_id >= len(word_reef_detail) or not word_reef_detail[word_id]:
+                continue
+            for entry in word_reef_detail[word_id]:
+                if len(entry) < 5:
                     continue
-                for rid, wq, sub_rid in word_reefs[word_id]:
-                    if rid != island_id:
-                        continue
-                    if sub_rid != _SUB_REEF_SENTINEL:
-                        votes[sub_rid] += wq
-                    else:
-                        # Multi-reef: look up detail
-                        if word_id < len(word_reef_detail):
-                            for d_iid, d_srid, d_wq in word_reef_detail[word_id]:
-                                if d_iid == island_id:
-                                    votes[d_srid] += d_wq
-            results[island_id] = max(votes, key=votes.get) if votes else None
+                _iid, town_id, reef_id, weight, level = entry
+                if level == 0 and town_id in top_town_set and reef_id >= 0:
+                    if town_id not in results:
+                        results[town_id] = defaultdict(float)
+                    results[town_id][reef_id] += weight
+
         return results
 
     def _extract_results(
@@ -802,11 +817,26 @@ class ReefScorer:
             selected = indexed[:top_k]
 
         reef_meta = self._reef_meta
-        sub_reef_map = self._resolve_sub_reefs(selected, matched)
-        sub_reef_meta = self._sub_reef_meta
-        top_reefs = [
-            ScoredReef(
-                reef_id=i,
+        v3_reef_meta = self._v3_reef_meta
+        reef_votes = self._resolve_reefs(selected, matched)
+
+        top_towns = []
+        for i in selected:
+            # Best reef within this town (if any reef-level words matched)
+            town_votes = reef_votes.get(i)
+            if town_votes:
+                best_reef_id = max(town_votes, key=town_votes.get)  # type: ignore[arg-type]
+                best_reef_name = (
+                    v3_reef_meta[best_reef_id].name
+                    if best_reef_id < len(v3_reef_meta)
+                    else None
+                )
+            else:
+                best_reef_id = None
+                best_reef_name = None
+
+            top_towns.append(ScoredTown(
+                town_id=i,
                 z_score=z_scores[i],
                 raw_score=raw_scores[i],
                 n_contributing_words=word_counts[i],
@@ -814,16 +844,36 @@ class ReefScorer:
                 quality_score=z_scores[i],
                 valence=reef_meta[i].valence,
                 avg_specificity=reef_meta[i].avg_specificity,
-                resolved_sub_reef_id=sub_reef_map.get(i),
-                resolved_sub_reef_name=(
-                    sub_reef_meta[sub_reef_map[i]].name
-                    if sub_reef_map.get(i) is not None
-                    and sub_reef_map[i] < len(sub_reef_meta)
-                    else None
-                ),
-            )
-            for i in selected
-        ]
+                resolved_sub_reef_id=best_reef_id,
+                resolved_sub_reef_name=best_reef_name,
+            ))
+
+        # Build flat top_reefs list: best reef per town, sorted by vote score
+        top_reefs: list[ScoredReef] = []
+        if v3_reef_meta:
+            for town_id, votes in reef_votes.items():
+                # Count contributing words per reef
+                word_reef_detail = self._word_reef_detail
+                reef_word_counts: dict[int, int] = defaultdict(int)
+                for word_id in matched:
+                    if word_id >= len(word_reef_detail) or not word_reef_detail[word_id]:
+                        continue
+                    for entry in word_reef_detail[word_id]:
+                        if len(entry) >= 5:
+                            _, d_tid, d_rid, _, level = entry
+                            if level == 0 and d_tid == town_id and d_rid in votes:
+                                reef_word_counts[d_rid] += 1
+
+                for reef_id, vote_score in votes.items():
+                    if reef_id < len(v3_reef_meta):
+                        top_reefs.append(ScoredReef(
+                            reef_id=reef_id,
+                            town_id=town_id,
+                            raw_score=vote_score,
+                            n_contributing_words=reef_word_counts.get(reef_id, 0),
+                            name=v3_reef_meta[reef_id].name,
+                        ))
+            top_reefs.sort(key=lambda r: r.raw_score, reverse=True)
 
         # Confidence: strength of the strongest signal above noise.
         # Using the top z-score (clamped to 0) rather than the gap between
@@ -865,7 +915,7 @@ class ReefScorer:
                 ScoredIsland(
                     island_id=iid,
                     aggregate_z=agg[0],  # type: ignore[arg-type]
-                    n_contributing_reefs=int(agg[1]),
+                    n_contributing_towns=int(agg[1]),
                     name=island_meta[iid].name,
                 )
                 for iid, agg in island_agg.items()
@@ -884,8 +934,9 @@ class ReefScorer:
         n_domainless = len(matched & self._domainless_word_ids) if self._domainless_word_ids else 0
 
         return TopicResult(
-            top_reefs=top_reefs,
+            top_towns=top_towns,
             top_islands=top_islands,
+            top_reefs=top_reefs,
             arch_scores=arch_scores,
             confidence=confidence,
             coverage=coverage,

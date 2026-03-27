@@ -1,0 +1,26 @@
+{
+  "version": "3.1-human",
+  "format": "msgpack",
+  "build_timestamp": "2026-03-12T05:00:16Z",
+  "files": {
+    "word_lookup.bin": "bffdc01d4b639cbe632f9bcf53ebf065d67cc7f332d26065f1e471c056b1c63d",
+    "word_islands.bin": "efbb83c623e6067f8893cafb46e2eb475306fe472edc4b3790215ad4e9f5dd72",
+    "word_towns.bin": "c194515f1844f66d0f24d12c85f98c4ac94d03e9165e399740343d3a57cae13a",
+    "island_meta.bin": "9940a8eeb77b883668a5b169b082f044541c994445f74cc00fe20a144229065e",
+    "background.bin": "631d768192ab89c2566c0cf1c8a75892b5423d8f24f54ef70e4b02a7c5590099",
+    "constants.bin": "f8b6358bbbbb017b46126c0e60b22584be9f8eead8d9d5609ed087b1831f2c68",
+    "compounds.bin": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+    "word_detail.bin": "cd32a0746d06c1cf0aa61b35b40677adbc1cfdbbe3d3cd4cc7168c52392973e4",
+    "town_meta.bin": "0820e4f96d4393083387e2658a55193e0f082d7abdeb1bbceb720e5e3de5ea0c"
+  },
+  "stats": {
+    "lens": "human_experience",
+    "n_islands": 9,
+    "n_towns": 39,
+    "n_reefs": 0,
+    "n_archs": 1,
+    "n_words": 5014,
+    "n_lookup_entries": 5014,
+    "n_domainless_words": 154162
+  }
+}

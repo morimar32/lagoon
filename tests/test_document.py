@@ -101,7 +101,7 @@ def test_sentence_results_populated(scorer):
     for seg in result.segments:
         assert len(seg.sentence_results) == len(seg.sentences)
         for sr in seg.sentence_results:
-            assert hasattr(sr, "top_reefs")
+            assert hasattr(sr, "top_towns")
             assert hasattr(sr, "matched_word_ids")
             assert hasattr(sr, "unknown_words")
 
@@ -163,7 +163,7 @@ def test_analyze_min_reef_z_default(scorer):
     ]
     result = scorer.analyze(sentences, min_chunk_sentences=1)
     for seg in result.segments:
-        for reef in seg.topic.top_reefs:
+        for reef in seg.topic.top_towns:
             assert reef.z_score >= 2.0
 
 
@@ -177,7 +177,7 @@ def test_analyze_min_reef_z_custom(scorer):
     threshold = 5.0
     result = scorer.analyze(sentences, min_chunk_sentences=1, min_reef_z=threshold)
     for seg in result.segments:
-        for reef in seg.topic.top_reefs:
+        for reef in seg.topic.top_towns:
             assert reef.z_score >= threshold
 
 
@@ -191,5 +191,5 @@ def test_analyze_sentence_results_use_min_reef_z(scorer):
     result = scorer.analyze(sentences, min_chunk_sentences=1, min_reef_z=threshold)
     for seg in result.segments:
         for sr in seg.sentence_results:
-            for reef in sr.top_reefs:
+            for reef in sr.top_towns:
                 assert reef.z_score >= threshold

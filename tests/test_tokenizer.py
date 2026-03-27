@@ -37,8 +37,8 @@ def test_deduplication(scorer):
     single = scorer.score("cortex")
     repeated = scorer.score("cortex cortex cortex cortex")
     # Same matched word set -> same top reef results
-    assert single.top_reefs[0].reef_id == repeated.top_reefs[0].reef_id
-    assert abs(single.top_reefs[0].z_score - repeated.top_reefs[0].z_score) < 0.01
+    assert single.top_towns[0].town_id == repeated.top_towns[0].town_id
+    assert abs(single.top_towns[0].z_score - repeated.top_towns[0].z_score) < 0.01
 
 
 def test_case_insensitive(scorer):
@@ -46,5 +46,5 @@ def test_case_insensitive(scorer):
     lower = scorer.score("cortex")
     upper = scorer.score("CORTEX")
     mixed = scorer.score("Cortex")
-    assert lower.top_reefs[0].reef_id == upper.top_reefs[0].reef_id
-    assert lower.top_reefs[0].reef_id == mixed.top_reefs[0].reef_id
+    assert lower.top_towns[0].town_id == upper.top_towns[0].town_id
+    assert lower.top_towns[0].town_id == mixed.top_towns[0].town_id
